@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Geo-Music App</title>
+    <style>
+        body { font-family: sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }
+        .btn { background: #1DB954; color: white; border: none; padding: 15px 30px; border-radius: 50px; cursor: pointer; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>Location Music Web App</h1>
+
+    <div id="login-section">
+        <button class="btn" onclick="loginToSpotify()">Connect Spotify</button>
+    </div>
+
+    <div id="sync-section" style="display: none;">
+        <button class="btn" onclick="startTracking()">Start Music Sync</button>
+        <p id="status">Syncing Active...</p>
+        <div id="coords">Waiting for GPS...</div>
+    </div>
+
+    <script>
+        // --- GLOBAL VARIABLES ---
+        // These live as long as the tab is open.
+        const clientId = '08b989759dcd46fab3f9126cf581f628';
+        const redirectUri = 'http://127.0.0.1:5500/fakeIndexDontUseThisOnePlease.html';
+        const scopes = 'user-modify-playback-state user-read-playback-state';
+        
+        let myZones = []; // This is your "List" (like an ArrayList in Java)
+
+        // --- THE BOOTUP (window.onload) ---
+        window.onload = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+
+            if (code) {
+                // 1. We found a code! Now we swap it for a token.
+                const token = await getToken(code);
+                
+                if (token) {
+                    sessionStorage.setItem('spotify_token', token);
+                    
+                    // 2. UI Switch
+                    document.getElementById('login-section').style.display = 'none';
+                    document.getElementById('sync-section').style.display = 'block';
+
+                    // 3. Load Zones
+                    const savedData = localStorage.getItem('user_zones');
+                    if (savedData) {
+                        myZones = JSON.parse(savedData);
+                        console.log("Zones Loaded:", myZones);
+                    }
+                    
+                    // Clean up the URL so the code doesn't stay in the address bar
+                    window.history.replaceState({}, document.title, "/");
+                }
+            }
+        };
+
+        // --- FUNCTIONS ---
+        // 1. Generate a random string (the secret)
+        const generateRandomString = (length) => {
+            const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            const values = crypto.getRandomValues(new Uint8Array(length));
+            return values.reduce((acc, x) => acc + possible[x % possible.length], "");
+        };
+
+        // 2. Hash that string using SHA-256
+        const sha256 = async (plain) => {
+            const encoder = new TextEncoder();
+            const data = encoder.encode(plain);
+            return window.crypto.subtle.digest('SHA-256', data);
+        };
+
+        // 3. Format the hash so the URL can read it
+        const base64encode = (input) => {
+            return btoa(String.fromCharCode(...new Uint8Array(input)))
+                .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+        };
+
+
+        async function getToken(code) {
+            const codeVerifier = localStorage.getItem('code_verifier');
+
+            const payload = {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        client_id: clientId,
+                        grant_type: 'authorization_code',
+                        code: code,
+                        redirect_uri: redirectUri,
+                        code_verifier: codeVerifier,
+                    }),
+                };
+
+                const response = await fetch("https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide", payload);
+                const data = await response.json();
+
+                if (data.access_token) {
+                    return data.access_token;
+                } else {
+                    console.error("Token swap failed:", data);
+                    return null;
+                }
+            }
+
+        async function loginToSpotify() {
+            const codeVerifier = generateRandomString(64);
+            const hashed = await sha256(codeVerifier);
+            const codeChallenge = base64encode(hashed);
+
+            // Store the verifier locally so we can use it when we get back
+            window.localStorage.setItem('code_verifier', codeVerifier);
+
+            const params = {
+                response_type: 'code',
+                client_id: clientId,
+                scope: scopes,
+                code_challenge_method: 'S256',
+                code_challenge: codeChallenge,
+                redirect_uri: redirectUri,
+            };
+
+            const authUrl = new URL("https://accounts.spotify.com/authorize?client_id=$");
+            authUrl.search = new URLSearchParams(params).toString();
+            window.location.href = authUrl.toString();
+        }
+
+        function startTracking() {
+            document.getElementById('status').innerText = "Syncing Active: Tracking GPS...";
+            
+            // watchPosition is like a 'Listener' that fires every time the phone moves
+            navigator.geolocation.watchPosition((position) => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                document.getElementById('coords').innerText = `Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}`;
+                
+                checkZones(lat, lon);
+            });
+        }
+
+        async function checkZones(currentLat, currentLon) {
+            const token = sessionStorage.getItem('spotify_token');
+            
+            // Logic: Loop through our 'List' of zones
+            myZones.forEach(zone => {
+                const latDist = Math.abs(currentLat - zone.lat);
+                const lonDist = Math.abs(currentLon - zone.lon);
+
+                // If within the "Bubble" (approx 100 meters)
+                if (latDist < 0.001 && lonDist < 0.001) {
+                    console.log(`Triggering Zone: ${zone.name}`);
+                    playSpotify(zone.playlist, token);
+                }
+            });
+        }
+
+        async function playSpotify(playlistUri, token) {
+            // This is the "Network Request" to Spotify's servers
+            try {
+                await fetch('https://api.spotify.com/v1/me/player/play', {
+                    method: 'PUT',
+                    body: JSON.stringify({ context_uri: playlistUri }),
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+            } catch (err) {
+                console.error("Spotify Play Error:", err);
+            }
+        }
+    </script>
+</body>
+</html>

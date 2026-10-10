@@ -1,0 +1,65 @@
+//to finish and review
+
+<h1>Spotify Controller</h1>
+
+<a href="/auth/login">
+    <button>Login with Spotify</button>
+</a>
+
+<button onclick="current()">Current Song</button>
+<button onclick="skip()">Skip</button>
+<button onclick="pause()">Pause</button>
+<button onclick="play()">Play</button>
+<button onclick="add()">Add to Playlist</button>
+<button onclick="deleteSong()">Remove from Playlist</button>
+<button onclick="setupStuff()">Setup Stuff</button>
+
+
+<pre id="output"></pre>
+
+<script>
+    async function current(){
+      const res = await fetch("/player/current")
+      const data = await res.json()
+      document.getElementById("output").innerText =
+        data.item.name + " - " + data.item.artists[0].name
+    }
+
+    async function skip(){
+      await fetch("/player/skip",{method:"POST"})
+    }
+
+    async function pause(){
+      await fetch("/player/pause",{method:"POST"})
+    }
+    async function play() {
+  await fetch("/player/play", { method: "POST" })
+}
+
+async function addToPlaylist() {
+  const trackUri = prompt("Enter track URI to add:");
+  if (!trackUri) return;
+  await fetch("/player/add", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uri: trackUri })
+  })
+}
+
+async function deleteFromPlaylist() {
+  const trackUri = prompt("Enter track URI to remove:");
+  if (!trackUri) return;
+  await fetch("/player/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uri: trackUri })
+  })
+}
+async function setupStuff() {
+  const res = await fetch("/player/setup-stuff", { method: "POST" });
+  const data = await res.json();
+
+  document.getElementById("output").innerText =
+    `${data.message}\nID: ${data.id}\nURI: ${data.uri}\nDescription: ${data.description}`;
+}
+</script>

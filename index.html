@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+
+<title>ZoneTune — Map Your Music</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Leaflet.draw -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="sp-overlay" id="googleOverlay" style="z-index: 9999;">
+  <div class="sp-card">
+    <div class="sp-title">Welcome to ZoneTune</div>
+    <div class="sp-sub">Please sign in with your Google account to access your maps and music.</div>
+    <button class="sp-btn" onclick="googleLogin()" style="background: white; color: black;">
+      Sign in with Google
+    </button>
+  </div>
+</div>
+
+<header>
+  <div class="logo">Zone<span>Tune</span></div>
+  <div class="badge">OpenStreetMap</div>
+  <div class="header-tip">Select a zone · draw its area on the map · assign Spotify music</div>
+
+  <button onclick="googleLogout()" style="background: transparent; color: #ff5f5f; border: 1px solid #ff5f5f; border-radius: 4px; padding: 4px 12px; cursor: pointer; margin-left: auto;">
+    Sign Out
+  </button>
+
+</header>
+
+<!-- Spotify Auth Overlay -->
+<div class="sp-overlay" id="spOverlay">
+  <div class="sp-card">
+    <div class="sp-logo">
+      <svg viewBox="0 0 24 24" fill="white"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
+    </div>
+    <div class="sp-title">Connect Spotify</div>
+    <div class="sp-sub">ZoneTune needs access to your Spotify account to play music when your person enters a zone.<br><br>You'll need a <strong>Spotify Premium</strong> account for playback.</div>
+    <button class="sp-btn" onclick="startSpotifyAuth()">
+      <svg viewBox="0 0 24 24" fill="white"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
+      Login with Spotify
+    </button>
+    <div class="sp-note"></div>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-scroll">
+      <div class="panel">
+        <div class="panel-label">Groups &amp; Zones</div>
+        <div class="groups-list" id="groupsList"></div>
+        <div class="add-group-row">
+          <input class="add-inp" id="newGroupName" placeholder="+ group name" maxlength="40">
+          <button class="btn btn-secondary" onclick="addGroup()">Add Group</button>
+        </div>
+        <div class="add-row">
+          <input class="add-inp" id="newZoneName" placeholder="+ zone name" maxlength="40">
+          <button class="btn" onclick="addZoneFromInput()">Add Zone</button>
+        </div>
+      </div>
+      <div class="music-section">
+        <div class="music-section-label">Music</div>
+        <div id="musicList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div class="map-wrap">
+    <div class="map-toolbar">
+      <button class="tool-btn on" id="btnDraw" onclick="setMode('draw')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        Draw Zone
+      </button>
+      <button class="tool-btn" id="btnNav" onclick="setMode('nav')">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Navigate
+      </button>
+      <div class="vsep"></div>
+      <button class="tool-btn danger" onclick="clearAllZones()">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        Clear All
+      </button>
+      <div class="active-zone-chip hidden" id="chipWrap">
+        <div class="chip-dot" id="chipDot"></div>
+        <span id="chipName">—</span>
+      </div>
+      <div class="vsep"></div>
+      <button class="tool-btn" id="btnPerson" onclick="togglePerson()">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="7" r="4"/><path d="M5.5 20c0-3.5 3-6 6.5-6s6.5 2.5 6.5 6"/></svg>
+        <span id="btnPersonLabel">Add Person</span>
+      </button>
+      <div class="vsep"></div>
+      <button class="tool-btn" id="btnGps" onclick="toggleGPS()">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        <span id="btnGpsLabel">Start GPS</span>
+      </button>
+    </div>
+    <div id="map"></div>
+    <!-- Now Playing Player -->
+    <div class="now-playing" id="nowPlaying">
+      <div class="np-art" id="npArt">
+        <svg class="np-art-placeholder" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9.5 8.5l7 3.5-7 3.5V8.5z" fill="currentColor"/></svg>
+      </div>
+      <div style="flex:1;min-width:0;">
+        <div class="np-zone-label" id="npZoneLabel">—</div>
+        <div class="np-track" id="npTrack">Not playing</div>
+        <div class="np-artist" id="npArtist"></div>
+        <div class="np-progress-wrap">
+          <span class="np-time" id="npTimeCur">0:00</span>
+          <div class="np-bar" id="npBar" onclick="seekTo(event)"><div class="np-bar-fill" id="npFill"></div></div>
+          <span class="np-time right" id="npTimeDur">0:00</span>
+        </div>
+        <div class="np-vol-wrap">
+          <svg class="np-vol-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"/></svg>
+          <input class="np-vol" type="range" min="0" max="100" value="80" id="npVol" oninput="setVolume(this.value)">
+        </div>
+      </div>
+      <div class="np-controls">
+        <button class="np-ctrl-btn" onclick="spotifyPrev()" title="Previous">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 20L9 12l10-8v16zM5 4h2v16H5z"/></svg>
+        </button>
+        <button class="np-ctrl-btn play-pause" id="npPlayPause" onclick="spotifyTogglePlay()">
+          <svg id="npPlayIcon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="np-ctrl-btn" onclick="spotifyNext()" title="Next">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M5 4l10 8-10 8V4zM19 4h2v16h-2z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="map-loading" id="mapLoading">
+      <div class="spinner"></div>
+      <div class="loading-txt">Loading map…</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<iframe id="scPlayer" src="https://w.soundcloud.com/player/?url=https://soundcloud.com/placeholder&auto_play=false"
+  style="position:fixed;width:1px;height:1px;bottom:0;left:0;opacity:0;pointer-events:none;" allow="autoplay">
+</iframe>
+<script src="index.js"></script>
+<script src="https://sdk.scdn.co/spotify-player.js"></script>
+<script src="https://w.soundcloud.com/player/api.js"></script>
+<script src="index.js"></script>
+</body>
+</html>
