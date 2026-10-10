@@ -1,16 +1,15 @@
 // ── FIREBASE CONFIGURATION ───────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey: "AIzaSyBhBwDc5AoS50n7XV4e4ZXgXyVb9YkxbLo",
-  authDomain: "zonetune.firebaseapp.com",
-  projectId: "zonetune",
-  storageBucket: "zonetune.firebasestorage.app",
-  messagingSenderId: "219218482618",
-  appId: "1:219218482618:web:e1d1448f7928e358077983",
-  measurementId: "G-J9JFTYDXJ9"
+  apiKey: "AIzaSyCIUl2p-sWCJYtXUPq2oaRWQ2qQoRA_JU4",
+  authDomain: "zonetune-f1c8e.firebaseapp.com",
+  projectId: "zonetune-f1c8e",
+  storageBucket: "zonetune-f1c8e.firebasestorage.app",
+  messagingSenderId: "956136154749",
+  appId: "1:956136154749:web:3fa11f3a19e3973b203314"
 };
 
 
-const SP_CLIENT_ID = '08b989759dcd46fab3f9126cf581f628';
+const SP_CLIENT_ID = 'f9b4775ad02344929b92935d577c9e17';
 const SP_REDIRECT_URI = window.location.href.split('?')[0].split('#')[0];
 const SP_SCOPES = [
   'streaming',

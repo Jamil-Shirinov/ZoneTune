@@ -10,7 +10,7 @@ addToPlaylist()
 */
 const axios = require("axios")
 
-let access_token = "BQAIeULPkBnc01gwzhNHzr7wtE6ZkG0jp4YD7EjA3UVLN-cjyU0n7eny5MKCcPj-3FByvE0JDaHsMsemMFt-vJSwa_0_E7_p3mztcf0rDgsI3OQUpzT0w3ZD91gHm_s6yLROOUbX7xw"
+let access_token = null
 function setAccessToken(token) {
   access_token = token
 }

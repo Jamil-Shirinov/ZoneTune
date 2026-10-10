@@ -1,5 +1,5 @@
 // Authorization token that must have been created previously. See : https://developer.spotify.com/documentation/web-api/concepts/authorization
-const token = 'BQBc3I-WJwlB6SVzP26X1Xg2UHk3f7rTmQe_lopTsSin_2rsxLEk-YEAbVvXIBHp9Gm69pmUOAhqlEysjCy8jl5oWTBSJIpDJKD70md748EQ4czR5wTNZ-fs0js_Tn1qLLtYw8rp3-g6xiKz19qeb2u60W5X-DqDQzFzMne_p2rlwYKs4vytu35NuHJTfaSul6b3H_VNmBPhGFOinbX-yfEv1vQE68EDSHmQvWvzW07yDuyodgzwxRYD3jVe0Lzr_Vs2jZiBhl42OT4OBMgIyb1Ft1CleKFp8T9QUQpoCdLawFLL4NsRRwjU-fu0aaq1sn_s';
+const token = 'YOUR_ACCESS_TOKEN';
 async function fetchWebApi(endpoint, method, body) {
   const res = await fetch(`https://api.spotify.com/${endpoint}`, {
     headers: {

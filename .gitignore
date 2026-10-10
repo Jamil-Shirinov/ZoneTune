@@ -1,0 +1,14 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Firebase CLI cache
+.firebase/
+
+# Dependencies
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
