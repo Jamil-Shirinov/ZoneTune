@@ -10,7 +10,7 @@ const firebaseConfig = {
 
 
 const SP_CLIENT_ID = 'f9b4775ad02344929b92935d577c9e17';
-const SP_REDIRECT_URI = window.location.href.split('?')[0].split('#')[0];
+const SP_REDIRECT_URI = window.location.origin + '/';
 const SP_SCOPES = [
   'streaming',
   'user-read-email',
@@ -821,6 +821,24 @@ function render() {
     ml.appendChild(div);
   });
 }
+
+// ── SIDEBAR TOGGLE ────────────────────────────────────────────────────────────
+function toggleSidebar(collapse) {
+  const app = document.querySelector('.app');
+  const collapsed = app.classList.toggle('sidebar-collapsed', collapse);
+  const btn = document.getElementById('btnSidebar');
+  const label = collapsed ? 'Show sidebar' : 'Hide sidebar';
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-expanded', String(!collapsed));
+  try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+  // Leaflet needs to re-measure once the map area has resized
+  setTimeout(() => map.invalidateSize(), 220);
+}
+
+try {
+  if (localStorage.getItem('sidebarCollapsed') === '1') toggleSidebar(true);
+} catch (e) {}
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function getZone(id) { return zones.find(z => z.id === id); }

@@ -71,7 +71,9 @@ header {
   grid-template-columns: 300px 1fr;
   flex: 1;
   overflow: hidden;
+  transition: grid-template-columns .2s ease;
 }
+.app.sidebar-collapsed { grid-template-columns: 0 1fr; }
 
 /* ── SIDEBAR ── */
 .sidebar {
@@ -80,11 +82,19 @@ header {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: visibility 0s;
+}
+/* Hide after the slide finishes so collapsed content can't be tabbed into */
+.app.sidebar-collapsed .sidebar {
+  visibility: hidden;
+  border-right: none;
+  transition: visibility 0s .2s;
 }
 
 .sidebar-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 299px; /* keep content from reflowing while the column animates */
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
@@ -754,7 +764,9 @@ header {
   }
   .sidebar-scroll {
     -webkit-overflow-scrolling: touch;
+    min-width: 0;
   }
+  .app.sidebar-collapsed .sidebar { display: none; }
 
   .panel { padding: 12px 14px; }
   .music-section { padding: 12px 14px; }
