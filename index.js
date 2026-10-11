@@ -309,12 +309,22 @@ document.addEventListener('keydown', e => {
   const t = e.target;
   if (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
   if (mode !== 'draw' || !drawHandler || drawVertexCount === 0) return;
+  restartDraw();
+});
+
+// Esc (Leaflet.draw's own cancel key) also starts over instead of leaving Draw mode idle
+// (deferred so the old handler finishes disabling before a new one starts)
+map.on(L.Draw.Event.CANCELED, () => {
+  if (mode === 'draw') setTimeout(restartDraw, 0);
+});
+
+function restartDraw() {
   startDraw();
   // A fresh handler parks its click-catching marker at the map center, so until the mouse
   // moves the map acts like Navigate mode; move it under the cursor straight away
   if (lastMapMouseMove) map.fire('mousemove', lastMapMouseMove);
   showToast('Drawing cleared — start over');
-});
+}
 
 map.on(L.Draw.Event.CREATED, function(e) {
   if (!selectedZoneId) return;
@@ -346,27 +356,6 @@ map.on(L.Draw.Event.CREATED, function(e) {
 });
 
 map.on(L.Draw.Event.DRAWSTOP, () => { drawHandler = null; drawVertexCount = 0; });
-
-// ── CANCEL DRAWING WITH "Q" ───────────────────────────────────────────────────
-// Mention the shortcut in Leaflet.draw's cursor tooltip so people can find it
-const polygonTips = L.drawLocal.draw.handlers.polygon.tooltip;
-for (const k of ['start', 'cont', 'end']) polygonTips[k] += ' Press Q to cancel.';
-
-// Throws away the unfinished shape (the zone keeps its previous shape, if it had
-// one) and leaves Draw mode. Returns false when nothing was being drawn.
-function cancelDrawing() {
-  if (!drawHandler || !drawHandler.enabled()) return false;
-  setMode('nav'); // disabling the draw handler removes the half-drawn shape
-  showToast('Drawing cancelled');
-  return true;
-}
-
-document.addEventListener('keydown', e => {
-  if ((e.key || '').toLowerCase() !== 'q' || e.ctrlKey || e.metaKey || e.altKey) return;
-  // Typing a "q" into a zone name, group name or track URL must not cancel
-  if (e.target.closest?.('input:not([type="range"]), textarea, select, [contenteditable="true"]')) return;
-  if (cancelDrawing()) e.preventDefault();
-});
 
 function applyStyle(layer, z, isSelected) {
   layer.setStyle({
@@ -1004,7 +993,9 @@ async function exchangeCode(code) {
     return true;
   }
   console.error('Token exchange failed', data);
-  return false;
+  // A code can only be used once, so drop it from the URL rather than retrying it on refresh
+  history.replaceState({}, '', window.location.pathname);
+  return data.error_description || data.error || 'unknown error';
 }
 
 async function refreshToken() {
@@ -1093,7 +1084,7 @@ function initPlayer() {
       connectPlayer();
       return;
     }
-    showToast(spotifyPlayerError + ' — please log in again', 6000);
+    showToast(spotifyPlayerError + ' — check the account is Premium and listed under User Management in the Spotify dashboard', 10000);
     document.getElementById('spOverlay').classList.remove('hidden');
   });
   spotifyPlayer.addListener('account_error', ({ message }) => {
@@ -1585,8 +1576,12 @@ async function initSpotify() {
   }
 
   if (code) {
-    const ok = await exchangeCode(code);
-    if (!ok) { showToast('Token exchange failed'); return; }
+    const result = await exchangeCode(code);
+    if (result !== true) {
+      showToast('Spotify login failed: ' + result, 8000);
+      document.getElementById('spOverlay').classList.remove('hidden');
+      return;
+    }
   }
 
   // Check stored token
