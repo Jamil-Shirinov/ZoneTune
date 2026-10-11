@@ -2137,9 +2137,7 @@ function renderLibraryTracks() {
   const el = document.getElementById('libTracks');
   const addAll = document.getElementById('libAddAll');
   if (!lib.sourceId) {
-    el.innerHTML = `<div class="lib-empty">Search Spotify above, or pick one of your playlists.<br>
-      Click a song to add it to the zone (click again to take it out).<br>
-      ♥ saves a song to your Liked Songs.</div>`;
+    el.innerHTML = '';
     addAll.hidden = true;
     return;
   }
