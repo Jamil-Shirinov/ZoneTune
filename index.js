@@ -151,7 +151,6 @@ async function advanceQueue() {
   await playQueueItem(queue[queueIndex]);
 }
 
-<<<<<<< HEAD
 // While the next song starts after one ended, the zone keeps glowing instead of flickering off
 let glowHoldUntil = 0;
 
@@ -182,7 +181,9 @@ function refreshQueue(z) {
     const done = queue.slice(0, queueIndex + 1).filter(t => t === current || z.playlist.includes(t));
     queue = done.concat(shuffleArray(z.playlist.filter(t => !done.includes(t))));
     queueIndex = done.length - 1;
-=======
+  }
+}
+
 // ── ZONE PLAYBACK GUARD ───────────────────────────────────────────────────────
 // zoneGen changes every time the person's zone changes, and playGen/playType record
 // which zoneGen the current music was started for and on which player. Music that
@@ -207,33 +208,15 @@ function queuePlayback(fn) {
   return run;
 }
 
-// Stops both players. Spotify is asked for its real state: currentlyPlaying stays
-// false until a play request has finished starting up.
-function stopZoneMusic() {
-  pendingSpotifyTrack = null;
-  if (scWidget && scReady) scWidget.pause();
-  if (spotifyPlayer) {
-    spotifyPlayer.getCurrentState()
-      .then(state => { if (state && !state.paused) return spotifyPlayer.pause(); })
-      .catch(() => {});
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
-  }
-}
-
 async function playQueueItem(track) {
   if (!track) return;
-<<<<<<< HEAD
+  // This music belongs to the person's current zone
+  playGen = zoneGen;
+  playType = track.type;
   stopVolumeRamp();
   const vol = track.volume ?? 100;
   const fadeIn = fadeInNextTrack;   // first song after entering a zone starts silent and fades in
   syncVolumeSlider(vol);
-=======
-  // This music belongs to the person's current zone
-  playGen = zoneGen;
-  playType = track.type;
-  const vol = (track.volume ?? 100) / 100;
-  syncVolumeSlider(track.volume ?? 100);
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   if (track.type === 'spotify') {
     if (scWidget && scReady) scWidget.pause();
     // The Spotify device only exists once the Web Playback SDK fires 'ready'.
@@ -1883,15 +1866,10 @@ function initPlayer() {
   });
 
   spotifyPlayer.addListener('player_state_changed', state => {
-<<<<<<< HEAD
-    onSpotifyState(state);
-=======
     if (!state) return;
     // Started for a zone the person has already left (see zoneGen)
     if (!state.paused && !mayPlay('spotify')) spotifyPlayer.pause().catch(() => {});
-    // Only update UI,  on't advance queue — advanceQueue is called explicitly
-    updatePlayerUI(state);
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
+    onSpotifyState(state);
   });
 
   spotifyPlayer.addListener('initialization_error', ({ message }) => {
@@ -2794,18 +2772,10 @@ function placePerson() {
 function removePerson() {
   if (personMarker) { map.removeLayer(personMarker); personMarker = null; }
   personVisible = false;
-<<<<<<< HEAD
   if (currentZoneId != null) {   // taking the person off the map counts as leaving the zone
     currentZoneId = null;
     onPersonZoneChange(null);
   }
-=======
-  currentZoneId = null;
-  // No person, no zone: stop the music (the player bar is hidden below, so it
-  // couldn't be paused by hand either)
-  zoneGen++;
-  stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   document.getElementById('btnPerson').classList.remove('on');
   document.getElementById('btnPersonLabel').textContent = 'Add Person';
   document.getElementById('nowPlaying').classList.remove('show');
@@ -2907,7 +2877,6 @@ function pointInLeafletPolygon(latlng, layer) {
 // Music fades in over FADE_MS when the person enters a zone and fades out over FADE_MS when
 // they leave it; the zone glows (fading in and out with the music) while its music plays.
 const FADE_MS = 2000;
-let zoneChangeSeq = 0;      // bumped on every zone change, so an older change still fading gives way
 let musicZoneId = null;     // zone whose songs are playing, or still fading out
 let playerLevel = 100;      // last volume (0-100) given to whichever player is in use
 let rampSeq = 0;
@@ -2945,12 +2914,12 @@ function rampVolume(type, to) {
 function stopVolumeRamp() { rampSeq++; }
 
 // Fade whatever is playing down to silence, then pause it and put its volume back for next time
-async function fadeOutMusic(seq) {
+async function fadeOutMusic(gen) {
   const spotifyOn = !!spotifyPlayer && currentlyPlaying;
   const scOn = !!scWidget && scReady && scPlaying;
   const type = spotifyOn ? 'spotify' : 'soundcloud';
   if (spotifyOn || scOn) await rampVolume(type, 0);
-  if (seq !== zoneChangeSeq) return;   // the person moved again during the fade; that change decides
+  if (gen !== zoneGen) return;   // the person moved again during the fade; that change decides
   if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause().catch(() => {});
   if (scWidget && scReady) scWidget.pause();
   if (spotifyOn || scOn) setPlayerVolume(type, queue[queueIndex]?.volume ?? 100);
@@ -2993,11 +2962,7 @@ function updateZoneGlow() {
 }
 
 async function onPersonZoneChange(zoneId) {
-<<<<<<< HEAD
-  const seq = ++zoneChangeSeq;
-=======
   const gen = ++zoneGen;
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   const pulse = document.getElementById('personPulse');
   if (pulse) pulse.classList.toggle('in-zone', !!zoneId);
   pendingSpotifyTrack = null; // a track waiting for the player belongs to the old zone
@@ -3005,13 +2970,8 @@ async function onPersonZoneChange(zoneId) {
   glowHoldUntil = 0;
   updateZoneGlow();           // the zone just left starts fading its glow straight away
 
-<<<<<<< HEAD
   const z = zoneId ? getZone(zoneId) : null;
   if (!z) {
-=======
-  if (!zoneId) {
-    stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     document.getElementById('npZoneLabel').textContent = 'Outside zones';
   } else {
     showToast(`Entered: ${z.name}`);
@@ -3019,6 +2979,7 @@ async function onPersonZoneChange(zoneId) {
     document.getElementById('nowPlaying').classList.add('show');
     // Stepped back into the zone whose music is still fading out: bring it back up, don't restart it
     if (z.id === musicZoneId && (currentlyPlaying || scPlaying)) {
+      playGen = zoneGen;
       rampVolume(activeTrackType(), queue[queueIndex]?.volume ?? 100);
       updateZoneGlow();
       return;
@@ -3026,18 +2987,14 @@ async function onPersonZoneChange(zoneId) {
   }
 
   // The zone just left (if any) fades out before this zone's music fades in
-  await fadeOutMusic(seq);
-  if (seq !== zoneChangeSeq) return;
+  await fadeOutMusic(gen);
+  if (gen !== zoneGen) return;
   musicZoneId = null;
   if (!z) return;
 
   if (z.playlist && z.playlist.length > 0) {
-<<<<<<< HEAD
     musicZoneId = z.id;
     fadeInNextTrack = true;
-    buildQueue(z);
-=======
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     try {
       await queuePlayback(async () => {
         if (gen !== zoneGen) return; // the person moved on while an earlier start finished
@@ -3050,10 +3007,6 @@ async function onPersonZoneChange(zoneId) {
       showToast('Could not start music: ' + (e?.message || e), 6000);
     }
   } else {
-<<<<<<< HEAD
-=======
-    stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     document.getElementById('npTrack').textContent = 'No tracks assigned';
     document.getElementById('npArtist').textContent = '';
   }
