@@ -22,6 +22,7 @@ const SP_SCOPES = [
   'playlist-read-private',
   'playlist-read-collaborative',
   'user-library-read',
+  'user-library-modify', // ♥ songs into Liked Songs from the library browser
 ].join(' ');
 
 let spotifyToken = null;
@@ -281,9 +282,12 @@ let nextId = parseInt(localStorage.getItem('zonetune_nextId') || '3');
 let groups = [];
 let nextGroupId = 1;
 let selectedZoneId = zones[0].id;   // ← must come AFTER zones is defined
-let mode = 'draw';
+let mode = 'nav';         // 'draw' (a new zone) | 'edit' (the selected zone's shape) | 'nav'
 let drawHandler = null;
 let drawVertexCount = 0;
+let drawTargetId = null;  // zone whose shape is being drawn in Edit mode; null = a new zone
+let drawColor = null;     // color of the shape being drawn
+let editSession = null;   // { zone, original } while Edit mode works on a zone; original = shape before editing
 let gpsWatchId = null;
 let isGpsActive = false;
 
@@ -317,16 +321,20 @@ function fadeOutLoader() {
 const drawnItems = new L.FeatureGroup().addTo(map);
 
 // ── DRAW MANAGEMENT ───────────────────────────────────────────────────────────
-function startDraw() {
+// Draw Zone draws a shape for a zone that doesn't exist yet (it's created when the
+// shape is finished). Edit Zone reshapes the selected zone by dragging its corners,
+// or draws its shape when it has none (or on Redraw), as `target`.
+function startDraw(target = null) {
   if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
-  if (!selectedZoneId) { showToast('Select a zone first'); return; }
-  const z = getZone(selectedZoneId);
-  if (!z) return;
+  drawTargetId = target ? target.id : null;
+  drawColor = target ? target.color : COLORS[zones.length % COLORS.length];
+  // Name the zone in the first hint, so it's clear what the shape is for
+  polygonTips.start = `${esc(drawLabel())}: ${basePolygonStart}`;
 
   drawHandler = new L.Draw.Polygon(map, {
     shapeOptions: {
-      color: z.color,
-      fillColor: z.color,
+      color: drawColor,
+      fillColor: drawColor,
       fillOpacity: 0.2,
       weight: 2,
       opacity: 0.9,
@@ -342,6 +350,105 @@ function startDraw() {
   updateDrawControls();
 }
 
+function drawLabel() {
+  return drawTargetId != null ? (getZone(drawTargetId)?.name || 'Zone') : 'New zone';
+}
+
+const cloneLatLngs = ll => Array.isArray(ll) ? ll.map(cloneLatLngs) : L.latLng(ll.lat, ll.lng);
+
+// Edit mode on the selected zone: drag its corners, or draw it if it has no shape yet
+function startEdit() {
+  const z = getZone(selectedZoneId);
+  if (!z) { showToast('Select a zone to edit first'); setMode('nav'); return; }
+  if (editSession?.zone === z && (drawHandler || z.layer?.editing?.enabled())) return; // already on it
+  finishShapeTools(); // keeps the changes to the zone edited before
+  editSession = { zone: z, original: z.layer ? cloneLatLngs(z.layer.getLatLngs()) : null };
+  if (z.layer) {
+    z.layer.editing.enable();
+    updateDrawControls();
+  } else {
+    startDraw(z);
+  }
+}
+
+// Edit mode's Redraw: draw the selected zone's shape from scratch
+function redrawEditedZone() {
+  const z = editSession?.zone;
+  if (!z) return;
+  if (z.layer?.editing?.enabled()) z.layer.editing.disable();
+  startDraw(z);
+}
+
+// Leaves drawing/editing. Shape changes made so far are kept and saved.
+function finishShapeTools() {
+  if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
+  drawTargetId = null;
+  if (editSession) {
+    const { zone: z, original } = editSession;
+    editSession = null;
+    if (z.layer?.editing?.enabled()) z.layer.editing.disable();
+    if (z.layer) applyStyle(z.layer, z, z.id === selectedZoneId);
+    const changed = JSON.stringify(z.layer ? z.layer.getLatLngs() : null) !== JSON.stringify(original);
+    if (changed && zones.includes(z)) {
+      saveZones();
+      render();
+      checkPersonZone(); // the new shape may now include or exclude the person
+    }
+  }
+  updateDrawControls();
+}
+
+// Edit mode's Cancel (or Esc): put the shape back the way it was when editing
+// started, even after a Redraw
+function cancelEdit() {
+  const s = editSession;
+  if (s) {
+    const z = s.zone;
+    if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
+    if (z.layer?.editing?.enabled()) z.layer.editing.disable();
+    if (s.original) {
+      z.layer.setLatLngs(cloneLatLngs(s.original));
+      // The corner editor keeps its own copy of the points; Leaflet.draw's own undo refreshes it like this
+      z.layer.fire('revert-edited', { layer: z.layer });
+    } else if (z.layer) {
+      drawnItems.removeLayer(z.layer);
+      z.layer = null;
+    }
+    showToast(`${z.name}: changes cancelled`);
+  }
+  setMode('nav');
+}
+
+// A finished shape: a brand-new zone (Draw mode) or the edited zone's new shape (Redraw)
+function createDrawnZone(layer, color) {
+  const z = { id: nextId++, name: nextDefaultZoneName(), color, playlist: [], shuffle: false, layer, groupId: null };
+  zones.push(z);
+  drawnItems.addLayer(layer);
+  attachLayerEvents(layer, z);
+  setMode('nav');
+  setSelected(z.id);
+  saveZones();
+  checkPersonZone();
+  showToast(`Created ${z.name}. Rename it and add music in the sidebar`, 4000);
+}
+
+function finishRedraw(z, layer) {
+  if (z.layer) drawnItems.removeLayer(z.layer);
+  z.layer = layer;
+  drawnItems.addLayer(layer);
+  applyStyle(layer, z, true);
+  attachLayerEvents(layer, z);
+  render(); // the sidebar's mapped ◉
+  if (mode === 'edit' && editSession?.zone === z) {
+    layer.editing.enable(); // fine-tune it, then Done (saved then)
+    updateDrawControls();
+    showToast('Drag the corners to adjust, then press Done');
+  } else {
+    saveZones();
+    checkPersonZone();
+  }
+}
+
 // Phones and tablets: no mouse to hover with and no keyboard for the Q shortcut
 const isTouchScreen = matchMedia('(hover: none) and (pointer: coarse)').matches;
 
@@ -351,6 +458,7 @@ for (const k of ['start', 'cont', 'end']) {
   if (isTouchScreen) polygonTips[k] = polygonTips[k].replace(/^Click/, 'Tap');
   else if (k !== 'start') polygonTips[k] += '<br>Press Q to start over.';
 }
+const basePolygonStart = polygonTips.start; // startDraw() puts the zone's name in front
 
 map.on(L.Draw.Event.DRAWVERTEX, e => {
   drawVertexCount = e.layers.getLayers().length;
@@ -397,8 +505,8 @@ function placeDrawCursor() {
 // Throw away the unfinished shape and keep drawing the same zone. The zone keeps its previous
 // shape, if it had one. Returns false when no shape is in progress.
 function restartDrawing() {
-  if (mode !== 'draw' || !drawHandler || drawVertexCount === 0) return false;
-  startDraw();
+  if (!drawHandler || drawVertexCount === 0) return false;
+  startDraw(drawTargetId != null ? getZone(drawTargetId) : null);
   showToast('Drawing cleared — start over');
   return true;
 }
@@ -415,24 +523,54 @@ const DrawPanel = L.Control.extend({
       <button type="button" class="tool-btn draw-restart-btn" title="${isTouchScreen ? 'Start over' : 'Start over (Q)'}">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
         Start over
-      </button>`;
+      </button>
+      <div class="edit-actions">
+        <button type="button" class="tool-btn edit-done" data-edit="done" title="Save the new shape">✓ Done</button>
+        <button type="button" class="tool-btn" data-edit="redraw" title="Draw the shape from scratch">Redraw</button>
+        <button type="button" class="tool-btn" data-edit="cancel" title="${isTouchScreen ? 'Undo the changes' : 'Undo the changes (Esc)'}">Cancel</button>
+      </div>`;
     L.DomEvent.disableClickPropagation(panel);
     L.DomEvent.on(panel.querySelector('button'), 'click', e => { L.DomEvent.stop(e); restartDrawing(); });
+    L.DomEvent.on(panel.querySelector('.edit-actions'), 'click', e => {
+      const action = e.target.closest('button')?.dataset.edit;
+      if (!action) return;
+      L.DomEvent.stop(e);
+      if (action === 'done') setMode('nav');
+      else if (action === 'redraw') redrawEditedZone();
+      else cancelEdit();
+    });
     return panel;
   },
 });
 const drawPanel = new DrawPanel().addTo(map).getContainer();
 const restartBtn = drawPanel.querySelector('.draw-restart-btn');
 const drawHint = drawPanel.querySelector('.draw-hint');
+const editActions = drawPanel.querySelector('.edit-actions');
+const redrawBtn = drawPanel.querySelector('[data-edit="redraw"]');
 
 function updateDrawControls() {
-  const drawing = mode === 'draw' && !!drawHandler;
+  const drawing = !!drawHandler;
+  const reshaping = mode === 'edit' && !!editSession && !drawing; // dragging corners
   restartBtn.classList.toggle('show', drawing && drawVertexCount > 0);
-  drawHint.classList.toggle('show', drawing && isTouchScreen);
+  editActions.classList.toggle('show', mode === 'edit' && !!editSession);
+  redrawBtn.classList.toggle('gone', drawing);
+  drawHint.classList.toggle('show', reshaping || (drawing && isTouchScreen));
   // Same wording Leaflet.draw would show for this many points
-  drawHint.textContent = drawVertexCount === 0 ? polygonTips.start
+  drawHint.textContent = reshaping
+    ? `${editSession.zone.name}: drag a corner to move it, drag a faded middle point to add a corner, ` +
+      `${isTouchScreen ? 'tap' : 'click'} a corner to remove it.`
+    : drawVertexCount === 0 ? `${drawLabel()}: ${basePolygonStart}`
     : drawVertexCount < 3 ? polygonTips.cont : polygonTips.end;
 }
+
+// Esc leaves Draw mode, or cancels Edit mode's changes
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || mode === 'nav') return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+  if (!document.getElementById('libOverlay').classList.contains('hidden')) return; // closes the Spotify picker instead
+  if (mode === 'edit') cancelEdit();
+  else { setMode('nav'); showToast('Drawing cancelled'); }
+});
 
 // Press Q while drawing to discard the in-progress shape and start over
 document.addEventListener('keydown', e => {
@@ -443,33 +581,11 @@ document.addEventListener('keydown', e => {
 });
 
 map.on(L.Draw.Event.CREATED, function(e) {
-  if (!selectedZoneId) return;
-  const z = getZone(selectedZoneId);
-  if (!z) return;
-
-  // Remove previous layer for this zone
-  if (z.layer) drawnItems.removeLayer(z.layer);
-
-  const layer = e.layer;
-  applyStyle(layer, z, true);
-  drawnItems.addLayer(layer);
-  z.layer = layer;
-  attachLayerEvents(layer, z);
-
-  saveZones();
-
-  render();
-  checkPersonZone(); // the redrawn shape may now include or exclude the person
-
-  // Auto-advance to next unmapped zone
-  const next = zones.find(z2 => !z2.layer && z2.id !== selectedZoneId);
-  if (next) {
-    setSelected(next.id);
-    if (mode === 'draw') setTimeout(startDraw, 150);
-  } else {
-    showToast('All zones mapped ✓');
-    drawHandler = null;
-  }
+  const target = drawTargetId != null ? getZone(drawTargetId) : null;
+  const color = drawColor;
+  drawTargetId = null;
+  // Leaflet.draw switches its handler off (DRAWSTOP) right after this event; act once it has
+  setTimeout(() => target ? finishRedraw(target, e.layer) : createDrawnZone(e.layer, color), 0);
 });
 
 map.on(L.Draw.Event.DRAWSTOP, () => {
@@ -492,8 +608,8 @@ function applyStyle(layer, z, isSelected) {
 function attachLayerEvents(layer, z) {
   layer.off('click');
   layer.on('click', function() {
-    setSelected(z.id);
-    openZonePopup(layer, z);
+    setSelected(z.id); // in Edit mode this switches editing to the clicked zone
+    if (mode === 'nav') openZonePopup(layer, z);
   });
   layer.on('mouseover', function() {
     if (z.id !== selectedZoneId) {
@@ -530,14 +646,14 @@ function openZonePopup(layer, z) {
 
 // ── MODE ─────────────────────────────────────────────────────────────────────
 function setMode(m) {
+  finishShapeTools(); // a half-drawn new zone is dropped; shape edits are kept
   mode = m;
   document.getElementById('btnDraw').classList.toggle('on', m === 'draw');
+  document.getElementById('btnEdit').classList.toggle('on', m === 'edit');
   document.getElementById('btnNav').classList.toggle('on', m === 'nav');
-  if (m === 'draw') {
-    startDraw();
-  } else {
-    if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
-  }
+  if (m === 'draw') startDraw();
+  else if (m === 'edit') startEdit();
+  updateDrawControls();
 }
 
 // ── SELECTION ────────────────────────────────────────────────────────────────
@@ -548,7 +664,7 @@ function setSelected(id) {
   });
   render();
   updateChip();
-  if (mode === 'draw') startDraw();
+  if (mode === 'edit') startEdit(); // edit whichever zone is selected
 }
 
 function updateChip() {
@@ -579,10 +695,11 @@ function addZoneFromInput() {
   zones.push(z);
   inp.value = '';
 
-  setSelected(z.id);
+  setSelected(z.id); // in Edit mode this goes straight to drawing its shape
 
   saveZones();
   render();
+  if (mode !== 'edit') showToast(`Added ${name}. Press Edit Zone to draw its area`, 4000);
 }
 
 function addGroup() {
@@ -635,6 +752,7 @@ function moveZoneToGroup(zoneId, groupId) {
 
 function deleteZone(id) {
   map.closePopup();
+  if (editSession?.zone.id === id || drawTargetId === id) setMode('nav');
   const z = getZone(id);
   if (z && z.layer) drawnItems.removeLayer(z.layer);
   zones = zones.filter(z => z.id !== id);
@@ -901,11 +1019,13 @@ async function fetchTrackLabel(url, uri) {
 
 function clearAllZones() {
   if (!confirm('Remove all zone shapes from the map?')) return;
+  const wasMode = mode;
+  setMode('nav'); // finish any drawing/editing before the shapes go
   zones.forEach(z => { if (z.layer) { drawnItems.removeLayer(z.layer); z.layer = null; } });
   saveZones();
   render();
   checkPersonZone(); // with no shapes left, the person is outside every zone
-  if (mode === 'draw') startDraw();
+  if (wasMode !== 'nav') setMode(wasMode);
 }
 
 // Touch drag state (for mobile - press & hold 1s to enter drag mode)
@@ -1705,12 +1825,15 @@ function msToTime(ms) {
 }
 
 // ── SPOTIFY LIBRARY BROWSER ───────────────────────────────────────────────────
-// Lists the user's playlists and Liked Songs so songs can be assigned to a zone
-// with a click instead of pasting URLs. open.spotify.com refuses to load inside
-// a frame, so the same data comes from the Web API and is drawn here.
-const LIBRARY_SCOPES = ['playlist-read-private', 'playlist-read-collaborative', 'user-library-read'];
+// Lists the user's playlists and Liked Songs, and searches all of Spotify, so
+// songs can be assigned to a zone with a click instead of pasting URLs, and ♥'d
+// into Liked Songs. open.spotify.com refuses to load inside a frame, so the same
+// data comes from the Web API and is drawn here.
+const LIBRARY_SCOPES = ['playlist-read-private', 'playlist-read-collaborative', 'user-library-read', 'user-library-modify'];
 const LIKED_SONGS = 'liked';
 const LIKED_SONGS_URL = 'https://open.spotify.com/collection/tracks';
+const SEARCH = 'search'; // sourceId while showing search results
+const HEART_PATH = 'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
 const OWN_PLAYLISTS_ONLY = "Spotify only lets apps read the songs in playlists you own or collaborate on. " +
   "Add this playlist's songs to your Liked Songs (or to a playlist of your own) to pick them here.";
 
@@ -1722,32 +1845,37 @@ const lib = {
   loadingSources: false,
   sourcesError: null,
   gen: 0,                // bumped whenever another list is opened, to drop stale pages
-  sourceId: null,        // playlist id or LIKED_SONGS
-  source: null,          // the open playlist object (null for Liked Songs)
+  sourceId: null,        // playlist id, LIKED_SONGS or SEARCH
+  source: null,          // the open playlist object (null for Liked Songs / search)
+  query: '',             // search text while sourceId is SEARCH
   tracks: [],
   tracksNext: null,
   tracksLoaded: false,
   loadingTracks: null,   // in-flight page request, so callers can await it
   tracksError: null,
+  liked: new Map(),      // track uri → in Liked Songs (missing = not checked yet)
+  likePending: new Set(),// track uris with a like/unlike request in flight
 };
 let libBackdropDown = false;
+let libSearchTimer = null;
 
-// GET from the Web API. Paging links are absolute URLs; the token is only ever
-// sent to api.spotify.com.
-async function spotifyApi(pathOrUrl, retried = false) {
+// Calls the Web API (GET unless `method` says otherwise). Paging links are
+// absolute URLs; the token is only ever sent to api.spotify.com.
+async function spotifyApi(pathOrUrl, { method = 'GET' } = {}, retried = false) {
   const url = pathOrUrl.startsWith('/') ? 'https://api.spotify.com/v1' + pathOrUrl : pathOrUrl;
   if (!url.startsWith('https://api.spotify.com/')) throw new Error('Unexpected Spotify URL');
   await ensureToken();
-  const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + spotifyToken } });
+  const res = await fetch(url, { method, headers: { 'Authorization': 'Bearer ' + spotifyToken } });
   if (res.status === 401 && !retried && await refreshToken().catch(() => false)) {
-    return spotifyApi(url, true);
+    return spotifyApi(url, { method }, true);
   }
   if (!res.ok) {
     const err = new Error(await spotifyErrorText(res));
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  const text = await res.text(); // saving to / removing from the library replies with no body
+  return text ? JSON.parse(text) : null;
 }
 
 // Logins from before the library browser existed lack these scopes
@@ -1771,6 +1899,7 @@ function openLibrary(zoneId) {
   document.getElementById('libOverlay').classList.remove('hidden');
   renderLibraryTracks(); // zones may have changed since it was last open
   loadLibrarySources(true); // pick up playlists made since last time
+  if (!isTouchScreen) document.getElementById('libSearch').focus(); // no surprise keyboard on phones
 }
 
 function closeLibrary() {
@@ -1784,7 +1913,7 @@ function updateLibraryZoneDot() {
 
 function libraryError(e) {
   if (e.status === 401 || (e.status === 403 && !hasLibraryScopes())) {
-    return { text: 'Reconnect Spotify so ZoneTune can read your playlists and Liked Songs.', action: 'reconnect' };
+    return { text: 'Reconnect Spotify so ZoneTune can read your playlists and Liked Songs and save songs you ♥.', action: 'reconnect' };
   }
   return { text: e.message, action: 'retry' };
 }
@@ -1829,7 +1958,7 @@ function renderLibrarySources() {
   const html = [`
     <button class="lib-source${lib.sourceId === LIKED_SONGS ? ' on' : ''}" data-source="${LIKED_SONGS}">
       <span class="lib-cover liked">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="${HEART_PATH}"/></svg>
       </span>
       <span class="lib-source-text">
         <span class="lib-source-name">Liked Songs</span>
@@ -1861,7 +1990,8 @@ function renderLibrarySources() {
   document.getElementById('libSources').innerHTML = html.join('');
 }
 
-function openLibrarySource(id) {
+// Empties the song list and switches it to another source (null = nothing open)
+function resetLibraryList(id) {
   lib.gen++;
   lib.sourceId = id;
   lib.source = (lib.playlists || []).find(p => p.id === id) || null;
@@ -1871,14 +2001,33 @@ function openLibrarySource(id) {
   lib.loadingTracks = null;
   lib.tracksError = null;
   document.getElementById('libFilter').value = '';
-  document.getElementById('libBody').classList.add('showing-tracks');
+  document.getElementById('libBody').classList.toggle('showing-tracks', !!id);
   renderLibrarySources();
+}
+
+function openLibrarySource(id) {
+  clearTimeout(libSearchTimer); // a search still waiting to run would replace this list
+  document.getElementById('libSearch').value = '';
+  resetLibraryList(id);
 
   if (lib.source && !canReadPlaylist(lib.source)) {
     lib.tracksError = { text: OWN_PLAYLISTS_ONLY, action: null };
     renderLibraryTracks();
     return;
   }
+  loadLibraryTracksPage();
+}
+
+function searchLibrary(raw) {
+  clearTimeout(libSearchTimer);
+  const q = raw.trim();
+  if (!q) {
+    if (lib.sourceId === SEARCH) { resetLibraryList(null); renderLibraryTracks(); }
+    return;
+  }
+  if (lib.sourceId === SEARCH && q === lib.query) return; // Enter right after the typing pause
+  resetLibraryList(SEARCH);
+  lib.query = q;
   loadLibraryTracksPage();
 }
 
@@ -1889,15 +2038,23 @@ function loadLibraryTracksPage() {
   if (!lib.sourceId || (lib.tracksLoaded && !lib.tracksNext)) return Promise.resolve(false);
 
   const gen = lib.gen;
-  const url = lib.tracksNext || (lib.sourceId === LIKED_SONGS
-    ? '/me/tracks?limit=50'
-    : `/playlists/${encodeURIComponent(lib.sourceId)}/items?limit=50`);
+  const searching = lib.sourceId === SEARCH;
+  const url = lib.tracksNext || (searching
+    ? `/search?type=track&limit=10&q=${encodeURIComponent(lib.query)}` // 10 is the API's maximum
+    : lib.sourceId === LIKED_SONGS
+      ? '/me/tracks?limit=50'
+      : `/playlists/${encodeURIComponent(lib.sourceId)}/items?limit=50`);
   lib.tracksError = null;
-  lib.loadingTracks = spotifyApi(url).then(page => {
+  lib.loadingTracks = spotifyApi(url).then(data => {
     if (gen !== lib.gen) return false;
-    lib.tracks.push(...(page.items || []).map(libraryTrackFromEntry).filter(Boolean));
+    // Search returns bare tracks under `tracks`; library lists wrap each song
+    const page = searching ? data.tracks || {} : data;
+    const entries = searching ? (page.items || []).map(t => ({ track: t })) : page.items || [];
+    const added = entries.map(libraryTrackFromEntry).filter(Boolean);
+    lib.tracks.push(...added);
     lib.tracksNext = page.next;
     lib.tracksLoaded = true;
+    refreshLikedState(added);
     return true;
   }, e => {
     if (gen === lib.gen) lib.tracksError = libraryError(e);
@@ -1932,6 +2089,27 @@ function libraryTrackFromEntry(entry) {
   };
 }
 
+// Asks Spotify which of these songs are in Liked Songs (40 per request) so their
+// ♥ shows filled. Songs it can't check just show an empty ♥.
+async function refreshLikedState(tracks) {
+  const uris = [...new Set(tracks.filter(t => t.playable).map(t => t.uri))];
+  if (lib.sourceId === LIKED_SONGS) {
+    uris.forEach(u => lib.liked.set(u, true));
+    updateLibraryTrackRows();
+    return;
+  }
+  for (let i = 0; i < uris.length; i += 40) {
+    const chunk = uris.slice(i, i + 40);
+    try {
+      const flags = await spotifyApi('/me/library/contains?uris=' + chunk.map(encodeURIComponent).join(','));
+      chunk.forEach((u, j) => { if (!lib.likePending.has(u)) lib.liked.set(u, !!flags?.[j]); });
+    } catch (e) {
+      return;
+    }
+    updateLibraryTrackRows();
+  }
+}
+
 function visibleLibraryTracks() {
   const q = document.getElementById('libFilter').value.trim().toLowerCase();
   if (!q) return lib.tracks;
@@ -1944,47 +2122,66 @@ function zoneHasTrack(z, uri) {
 
 function renderLibraryTracks() {
   const liked = lib.sourceId === LIKED_SONGS;
+  const searching = lib.sourceId === SEARCH;
   const p = lib.source;
-  const spUrl = liked ? LIKED_SONGS_URL : p?.external_urls?.spotify || '';
+  const spUrl = searching ? 'https://open.spotify.com/search/' + encodeURIComponent(lib.query)
+    : liked ? LIKED_SONGS_URL : p?.external_urls?.spotify || '';
   const openLink = document.getElementById('libOpenSp');
   openLink.hidden = !spUrl.startsWith('https://open.spotify.com/');
   if (!openLink.hidden) openLink.href = spUrl;
-  document.getElementById('libSrcName').textContent = liked ? 'Liked Songs' : p?.name || 'Songs';
-  document.getElementById('libFilterRow').hidden = !lib.sourceId;
+  document.getElementById('libSrcName').textContent =
+    searching ? `Results for “${lib.query}”` : liked ? 'Liked Songs' : p?.name || 'Songs';
+  // Search results are already what was asked for: no filter box or "Add all"
+  document.getElementById('libFilterRow').hidden = !lib.sourceId || searching;
 
   const el = document.getElementById('libTracks');
   const addAll = document.getElementById('libAddAll');
   if (!lib.sourceId) {
-    el.innerHTML = `<div class="lib-empty">Pick a playlist to see its songs.<br>
-      Click a song to add it to the zone. Click it again to take it out.</div>`;
+    el.innerHTML = `<div class="lib-empty">Search Spotify above, or pick one of your playlists.<br>
+      Click a song to add it to the zone (click again to take it out).<br>
+      ♥ saves a song to your Liked Songs.</div>`;
     addAll.hidden = true;
     return;
   }
 
   const z = getZone(lib.zoneId);
   const shown = visibleLibraryTracks();
-  let html = shown.map(t => `
-    <button class="lib-track${z && t.playable && zoneHasTrack(z, t.uri) ? ' added' : ''}"
-      ${t.playable ? `data-track="${t.id}" aria-pressed="${!!z && zoneHasTrack(z, t.uri)}"` : `disabled title="${esc(t.reason)}"`}>
-      <span class="lib-cover">${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '♫'}</span>
-      <span class="lib-track-text">
-        <span class="lib-track-name">${esc(t.name)}</span>
-        <span class="lib-track-artist">${esc(t.reason || [t.artists, t.album].filter(Boolean).join(' · '))}</span>
-      </span>
-      <span class="lib-track-dur">${t.duration ? msToTime(t.duration) : ''}</span>
-      <span class="lib-track-act" aria-hidden="true"></span>
-    </button>`).join('');
+  let html = shown.map(t => {
+    const added = !!z && t.playable && zoneHasTrack(z, t.uri);
+    return `
+    <div class="lib-row">
+      <button class="lib-track${added ? ' added' : ''}"
+        ${t.playable ? `data-track="${t.id}" aria-pressed="${added}"` : `disabled title="${esc(t.reason)}"`}>
+        <span class="lib-cover">${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '♫'}</span>
+        <span class="lib-track-text">
+          <span class="lib-track-name">${esc(t.name)}</span>
+          <span class="lib-track-artist">${esc(t.reason || [t.artists, t.album].filter(Boolean).join(' · '))}</span>
+        </span>
+        <span class="lib-track-dur">${t.duration ? msToTime(t.duration) : ''}</span>
+        <span class="lib-track-act" aria-hidden="true"></span>
+      </button>
+      ${t.playable
+        ? `<button class="lib-like" data-like="${t.id}">
+             <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART_PATH}"/></svg>
+           </button>`
+        : '<span class="lib-like-spacer"></span>'}
+    </div>`;
+  }).join('');
 
-  if (lib.loadingTracks) html += '<div class="lib-empty">Loading songs…</div>';
+  if (lib.loadingTracks) html += `<div class="lib-empty">${searching ? 'Searching…' : 'Loading songs…'}</div>`;
   else if (lib.tracksError) html += libraryErrorHtml(lib.tracksError, 'more-tracks');
-  else if (lib.tracksNext) html += '<button class="btn btn-secondary lib-more" data-action="more-tracks">Load more songs</button>';
-  else if (!shown.length) html += `<div class="lib-empty">${lib.tracks.length ? 'No songs match your filter.' : 'No songs here yet.'}</div>`;
+  else if (lib.tracksNext) html += `<button class="btn btn-secondary lib-more" data-action="more-tracks">${searching ? 'More results' : 'Load more songs'}</button>`;
+  else if (!shown.length) {
+    html += `<div class="lib-empty">${searching ? `No songs found for “${esc(lib.query)}”.`
+      : lib.tracks.length ? 'No songs match your filter.' : 'No songs here yet.'}</div>`;
+  }
 
   el.innerHTML = html;
-  addAll.hidden = !shown.some(t => t.playable);
+  addAll.hidden = searching || !shown.some(t => t.playable);
+  updateLibraryTrackRows();
 }
 
-// Refresh the added/not-added marks without rebuilding the list (keeps focus)
+// Refresh the added and ♥ marks without rebuilding the list (keeps focus)
 function updateLibraryTrackRows() {
   const z = getZone(lib.zoneId);
   document.querySelectorAll('#libTracks .lib-track[data-track]').forEach(btn => {
@@ -1992,6 +2189,43 @@ function updateLibraryTrackRows() {
     btn.classList.toggle('added', added);
     btn.setAttribute('aria-pressed', String(added));
   });
+  document.querySelectorAll('#libTracks .lib-like[data-like]').forEach(btn => {
+    const uri = 'spotify:track:' + btn.dataset.like;
+    const liked = !!lib.liked.get(uri);
+    const label = liked ? 'Remove from Liked Songs' : 'Save to Liked Songs';
+    btn.classList.toggle('liked', liked);
+    btn.setAttribute('aria-pressed', String(liked));
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    btn.disabled = lib.likePending.has(uri);
+  });
+}
+
+// ♥ / un-♥ a song in the user's Liked Songs. The heart changes right away and
+// changes back if Spotify refuses.
+async function toggleLibraryLike(id) {
+  const t = lib.tracks.find(x => x.id === id);
+  if (!t || lib.likePending.has(t.uri)) return;
+  const like = !lib.liked.get(t.uri);
+  lib.liked.set(t.uri, like);
+  lib.likePending.add(t.uri);
+  updateLibraryTrackRows();
+  try {
+    await spotifyApi('/me/library?uris=' + encodeURIComponent(t.uri), { method: like ? 'PUT' : 'DELETE' });
+    showToast(like ? `Saved to Liked Songs: ${t.name}` : `Removed from Liked Songs: ${t.name}`);
+  } catch (e) {
+    lib.liked.set(t.uri, !like);
+    const err = libraryError(e);
+    if (err.action === 'reconnect') {
+      document.getElementById('libNotice').hidden = false;
+      showToast('Reconnect Spotify (button at the top) to save songs you ♥', 6000);
+    } else {
+      showToast(`Couldn't update Liked Songs: ${err.text}`, 6000);
+    }
+  } finally {
+    lib.likePending.delete(t.uri);
+    updateLibraryTrackRows();
+  }
 }
 
 // Same shape addTrack() stores for a pasted Spotify URL
@@ -2074,6 +2308,7 @@ async function addAllLibraryTracks() {
     const btn = e.target.closest('button');
     if (!btn) return;
     if (btn.dataset.source) openLibrarySource(btn.dataset.source);
+    else if (btn.dataset.like) toggleLibraryLike(btn.dataset.like);
     else if (btn.dataset.track) toggleLibraryTrack(btn.dataset.track);
     else switch (btn.dataset.action) {
       case 'close':        closeLibrary(); break;
@@ -2090,6 +2325,13 @@ async function addAllLibraryTracks() {
     updateLibraryTrackRows();
   });
   document.getElementById('libFilter').addEventListener('input', renderLibraryTracks);
+  // Search once typing pauses (not on every keystroke), or right away on Enter
+  const search = document.getElementById('libSearch');
+  search.addEventListener('input', () => {
+    clearTimeout(libSearchTimer);
+    libSearchTimer = setTimeout(() => searchLibrary(search.value), 350);
+  });
+  search.addEventListener('keydown', e => { if (e.key === 'Enter') searchLibrary(search.value); });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeLibrary();
   });
@@ -2139,10 +2381,10 @@ function togglePerson() {
   personVisible ? removePerson() : placePerson();
 }
 function placePerson() {
-  // In Draw mode Leaflet.draw's invisible cursor marker sits on top of every
+  // While drawing, Leaflet.draw's invisible cursor marker sits on top of every
   // marker and swallows the mouse, so the person could never be dragged into a
   // zone. Switch to Navigate mode while the person is on the map.
-  if (mode === 'draw') setMode('nav');
+  if (mode !== 'nav') setMode('nav');
   activateSpotifyElement(); // runs inside the "Add Person" click
   const center = map.getCenter();
   personMarker = L.marker(center, { icon: personIcon, draggable: true, zIndexOffset: 1000 }).addTo(map);
@@ -2378,7 +2620,9 @@ auth.onAuthStateChanged(async (user) => {  // <-- Notice the 'async' here
     
     render();
     updateChip();
-    setTimeout(() => setMode('draw'), 600);
+    // Start in Navigate so clicks can't start a zone by accident, except on a brand-new
+    // map (no shapes yet), which starts on drawing the selected zone
+    setTimeout(() => setMode(zones.some(z => z.layer) ? 'nav' : 'edit'), 600);
     initSpotify(); 
     initSoundcloud();
   } else {
