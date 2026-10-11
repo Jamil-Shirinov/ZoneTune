@@ -9,7 +9,7 @@ const firebaseConfig = {
 };
 
 
-const SP_CLIENT_ID = 'f9b4775ad02344929b92935d577c9e17';
+const SP_CLIENT_ID = 'e3398d1a2bb140299e744f2d8e0cf8dd';
 const SP_REDIRECT_URI = window.location.origin + '/';
 const SP_SCOPES = [
   'streaming',
@@ -17,6 +17,10 @@ const SP_SCOPES = [
   'user-read-private',
   'user-read-playback-state',
   'user-modify-playback-state',
+  // Spotify library browser (pick songs from your playlists / Liked Songs)
+  'playlist-read-private',
+  'playlist-read-collaborative',
+  'user-library-read',
 ].join(' ');
 
 let spotifyToken = null;
@@ -52,6 +56,8 @@ function googleLogout() {
 // ── PALETTE ──────────────────────────────────────────────────────────────────
 const COLORS = ['#c8ff47','#47cfff','#ff5f5f','#ffd166','#c77dff','#ff9f1c','#06d6a0','#ef476f'];
 const SC_CLIENT_ID = 'L8SGpVAf1pxzBWSkGWrt01k6lOcsa1EZ';
+const MAX_ZONE_TRACKS = 100;
+const SPOTIFY_ICON_PATH = 'M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z';
 
 // ── PERSISTENCE ───────────────────────────────────────────────────────────────
 async function saveZones() {
@@ -485,31 +491,156 @@ function deleteZone(id) {
 
 function detectTrackType(url) {
   if (/^spotify:|open\.spotify\.com/.test(url)) return 'spotify';
-  if (/soundcloud\.com\/[^/]+\/[^/]+/.test(url)) return 'soundcloud';
+  if (parseSoundcloudLink(url)) return 'soundcloud';
   return null;
 }
 function extractSoundcloudPermalink(url) {
-  // Normalize to just https://soundcloud.com/artist/track
+  // Normalize to just https://soundcloud.com/artist/track (no query, m./www. host)
   try {
     const u = new URL(url);
-    if (u.hostname === 'soundcloud.com') return url.split('?')[0];
+    const path = u.pathname.replace(/\/+$/, '');
+    if (SC_HOSTS.includes(u.hostname) && path) return 'https://soundcloud.com' + path;
   } catch (e) { }
   return null;
 }
-async function fetchSoundcloudLabel(permalink) {
-  try {
-    const res = await fetch(
-      `https://soundcloud.com/oembed?url=${encodeURIComponent(permalink)}&format=json`
-    );
-    const data = await res.json();
-    return {
-      label: (data.title || permalink).slice(0, 100).replace(/<[^>]*>/g, ''),
-      artworkUrl: data.thumbnail_url || null,
-      trackId: null,
-    };
-  } catch (e) {
-    return { label: permalink, artworkUrl: null, trackId: null };
+
+// ── SOUNDCLOUD LINKS ──────────────────────────────────────────────────────────
+// Any SoundCloud link can be pasted: a song, a playlist/album, a profile (their
+// uploads) or a likes page, from soundcloud.com, m./www. or an on.soundcloud.com
+// share link. There's no API key, so oEmbed says what the link is and a hidden
+// embed widget (the same player that plays the songs) lists what's in it.
+const SC_HOSTS = ['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com'];
+const SC_LINK_HELP = 'Paste a SoundCloud song, playlist, album, profile or likes link';
+// Site pages (soundcloud.com/<page>) that aren't anyone's profile
+const SC_SITE_PAGES = ['discover', 'search', 'stream', 'feed', 'charts', 'upload', 'settings', 'messages', 'notifications', 'tags'];
+// Profile tabs the embed widget can't show, and what to paste instead
+const SC_PROFILE_TABS = {
+  sets: 'Open one of their playlists and paste its link',
+  albums: 'Open one of their albums and paste its link',
+  'popular-tracks': 'Paste their profile link to add their uploads',
+  reposts: "SoundCloud doesn't let other sites list reposts",
+  followers: SC_LINK_HELP,
+  following: SC_LINK_HELP,
+  comments: SC_LINK_HELP,
+};
+
+// Returns null for non-SoundCloud links, { error } for SoundCloud pages that
+// can't be added, otherwise { kind: 'likes' | 'link', url } with url normalized
+function parseSoundcloudLink(raw) {
+  let u;
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : 'https://' + raw); } catch (e) { return null; }
+  if (u.hostname === 'on.soundcloud.com') return { kind: 'link', url: 'https://on.soundcloud.com' + u.pathname };
+  if (!SC_HOSTS.includes(u.hostname)) return null;
+
+  const [user, tab, ...rest] = u.pathname.split('/').filter(Boolean);
+  if (!user || SC_SITE_PAGES.includes(user)) return { error: SC_LINK_HELP };
+  if (user === 'you') {
+    return { error: 'Your SoundCloud Library is only visible to you. Paste your profile’s likes link (soundcloud.com/your-name/likes) or a playlist link instead' };
   }
+  const profile = 'https://soundcloud.com/' + user;
+  if (!rest.length && tab === 'likes') return { kind: 'likes', url: profile };
+  if (!rest.length && tab === 'tracks') return { kind: 'link', url: profile };
+  if (!rest.length && SC_PROFILE_TABS[tab]) return { error: SC_PROFILE_TABS[tab] };
+  // A profile, song or playlist (secret links keep their /s-xxxx part)
+  return { kind: 'link', url: [profile, tab, ...rest].filter(Boolean).join('/') };
+}
+
+// What the link points at, as the API URL the embed widget loads,
+// e.g. https://api.soundcloud.com/playlists/18
+async function soundcloudOembed(url) {
+  let res;
+  try {
+    res = await fetch(`https://soundcloud.com/oembed?format=json&url=${encodeURIComponent(url)}`);
+  } catch (e) {
+    throw new Error("Couldn't reach SoundCloud. Check your connection and try again");
+  }
+  if (res.status === 403 || res.status === 404) throw new Error("SoundCloud couldn't find that link. It may be private or deleted");
+  if (!res.ok) throw new Error(`SoundCloud error (${res.status})`);
+  const data = await res.json();
+  const src = (data.html || '').match(/[?&;]url=([^&"]+)/);
+  const apiUrl = src ? decodeURIComponent(src[1]) : '';
+  const m = apiUrl.match(/^https:\/\/api\.soundcloud\.com\/(tracks|playlists|users)\/(\d+)/);
+  if (!m) throw new Error("That SoundCloud link can't be played on other sites");
+  return { apiUrl, kind: m[1], id: m[2], title: data.title || 'SoundCloud' };
+}
+
+// Loads a URL into a throwaway hidden widget and collects up to `limit` songs.
+// Song details arrive in batches, and profiles/likes (`paged`) a page at a time,
+// so poll until enough have arrived or the list stops changing.
+function loadSoundcloudSounds(url, limit, paged) {
+  return new Promise((resolve, reject) => {
+    const iframe = document.createElement('iframe');
+    iframe.src = 'https://w.soundcloud.com/player/?auto_play=false&url=' + encodeURIComponent(url);
+    iframe.title = 'SoundCloud link reader';
+    iframe.tabIndex = -1;
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;width:1px;height:1px;bottom:0;left:0;opacity:0;pointer-events:none;';
+    document.body.appendChild(iframe);
+
+    const isFull = s => s && s.title && s.permalink_url;
+    let latest = [], poll = null, done = false;
+    const finish = (err, sounds) => {
+      if (done) return;
+      done = true;
+      clearTimeout(giveUp);
+      clearInterval(poll);
+      iframe.remove();
+      if (err) reject(err); else resolve(sounds);
+    };
+    // Keep whatever arrived if a huge list is still loading
+    const giveUp = setTimeout(() => latest.length
+      ? finish(null, latest)
+      : finish(new Error('SoundCloud took too long to respond. Try again')), 30000);
+
+    const widget = SC.Widget(iframe);
+    widget.bind(SC.Widget.Events.READY, () => {
+      let lastSig = '', lastChange = Date.now();
+      poll = setInterval(() => widget.getSounds(all => {
+        all = all || [];
+        const head = all.slice(0, limit);
+        latest = head.filter(isFull);
+        const sig = all.length + ':' + all.filter(isFull).length;
+        if (sig !== lastSig) { lastSig = sig; lastChange = Date.now(); }
+        const headDone = latest.length === head.length && (!paged || all.length >= limit);
+        if (headDone || Date.now() - lastChange > 3000) finish(null, latest);
+      }), 500);
+    });
+  });
+}
+
+// Zone playlist entry for a widget sound, or null if SoundCloud won't stream it
+function soundcloudTrackFromSound(s) {
+  if (s.kind !== 'track' || s.streamable === false || s.playable === false || s.policy === 'BLOCK') return null;
+  let permalink = extractSoundcloudPermalink(s.permalink_url || '');
+  if (!permalink) return null;
+  // Private songs only play through their secret share link
+  if (s.secret_token && !permalink.endsWith('/' + s.secret_token)) permalink += '/' + s.secret_token;
+  const name = s.user?.username ? `${s.title} — ${s.user.username}` : s.title;
+  return {
+    url: permalink,
+    permalink,
+    label: String(name).slice(0, 100).replace(/<[^>]*>/g, ''),
+    artworkUrl: s.artwork_url || s.user?.avatar_url || null,
+    trackId: s.id ?? null,
+    type: 'soundcloud',
+    volume: 100,
+  };
+}
+
+// Resolves any pasted SoundCloud link to the songs it contains
+async function resolveSoundcloudLink(raw) {
+  const link = parseSoundcloudLink(raw);
+  if (!link || link.error) throw new Error(link?.error || SC_LINK_HELP);
+  const info = await soundcloudOembed(link.url);
+  // A likes page embeds as the profile itself, so ask for the likes list instead
+  const likes = link.kind === 'likes' && info.kind === 'users';
+  const src = likes ? `https://api.soundcloud.com/users/${info.id}/favorites` : info.apiUrl;
+  const sounds = await loadSoundcloudSounds(src, MAX_ZONE_TRACKS, info.kind === 'users');
+  return {
+    kind: info.kind,
+    title: likes ? `${info.title}’s likes` : info.title,
+    tracks: sounds.map(soundcloudTrackFromSound).filter(Boolean),
+  };
 }
 
 function sanitizeName(val) {
@@ -536,10 +667,10 @@ function sanitizeSpotifyUrl(url) {
 async function addTrack(zoneId, url) {
   const z = getZone(zoneId);
   if (!z || !url.trim()) return;
-  if (z.playlist.length >= 100) { showToast('Max 100 tracks per zone'); return; }
+  if (z.playlist.length >= MAX_ZONE_TRACKS) { showToast(`Max ${MAX_ZONE_TRACKS} tracks per zone`); return; }
 
   const type = detectTrackType(url.trim());
-  if (!type) { showToast('Paste a Spotify or SoundCloud track URL'); return; }
+  if (!type) { showToast('Paste a Spotify track URL or a SoundCloud link'); return; }
 
   if (type === 'spotify') {
     const uri = extractSpotifyUri(url.trim());
@@ -548,11 +679,33 @@ async function addTrack(zoneId, url) {
     z.playlist.push({ url: url.trim(), uri, label, type: 'spotify', volume: 100 });
 
   } else if (type === 'soundcloud') {
-    const permalink = extractSoundcloudPermalink(url.trim());
-    if (!permalink) { showToast('Invalid SoundCloud URL'); return; }
-    showToast('Fetching track info…');
-    const { label, artworkUrl, trackId } = await fetchSoundcloudLabel(permalink);
-    z.playlist.push({ url: permalink, permalink, label, artworkUrl, trackId, type: 'soundcloud', volume: 100 });
+    showToast('Loading from SoundCloud…', 30000);
+    let found;
+    try {
+      found = await resolveSoundcloudLink(url.trim());
+    } catch (e) {
+      showToast(e.message, 6000);
+      return;
+    }
+    if (!found.tracks.length) { showToast(`No playable songs in ${found.title}`, 4000); return; }
+
+    const have = new Set(z.playlist.map(t => t.permalink));
+    const fresh = found.tracks.filter(t => {
+      if (have.has(t.permalink)) return false;
+      have.add(t.permalink); // a playlist can list the same song twice
+      return true;
+    });
+    const room = MAX_ZONE_TRACKS - z.playlist.length;
+    const added = fresh.slice(0, room);
+    if (!added.length) {
+      showToast(room ? `Already in ${z.name}` : `Max ${MAX_ZONE_TRACKS} tracks per zone`);
+      return;
+    }
+    z.playlist.push(...added);
+    showToast(found.kind === 'tracks'
+      ? `Added to ${z.name}: ${added[0].label}`
+      : `Added ${added.length} song${added.length !== 1 ? 's' : ''} from ${found.title} to ${z.name}` +
+        (z.playlist.length >= MAX_ZONE_TRACKS ? ` (zone is now full: max ${MAX_ZONE_TRACKS})` : ''), 4000);
   }
 
   saveZones();
@@ -815,10 +968,17 @@ function render() {
   </div>  
     ${tracksHtml || '<div class="no-tracks">No tracks yet</div>'}
     <div class="add-track-row">
-      <input class="spotify-inp add-track-inp" placeholder="Paste Spotify or SoundCloud URL…">
+      <input class="spotify-inp add-track-inp" placeholder="Paste Spotify or SoundCloud link…"
+        title="A Spotify song link, or any SoundCloud link: song, playlist, album, profile or likes page">
       <button class="add-track-btn" data-zone="${z.id}">Add</button>
     </div>
+    <button class="browse-sp-btn" data-zone="${z.id}">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="${SPOTIFY_ICON_PATH}"/></svg>
+      Pick from my Spotify
+    </button>
   `;
+
+    div.querySelector('.browse-sp-btn').addEventListener('click', () => openLibrary(z.id));
 
     // Add track on button click
     div.querySelector('.add-track-btn').addEventListener('click', e => {
@@ -961,6 +1121,8 @@ async function exchangeCode(code) {
     sessionStorage.setItem('sp_token', spotifyToken);
     sessionStorage.setItem('sp_expiry', expiry);
     if (data.refresh_token) sessionStorage.setItem('sp_refresh', data.refresh_token);
+    if (data.scope != null) sessionStorage.setItem('sp_scope', data.scope);
+    sessionStorage.setItem('sp_client', SP_CLIENT_ID);
     sessionStorage.removeItem('sp_verifier');
     // Clean URL
     history.replaceState({}, '', window.location.pathname);
@@ -988,6 +1150,7 @@ async function refreshToken() {
     const expiry = Date.now() + (data.expires_in - 60) * 1000;
     sessionStorage.setItem('sp_token', spotifyToken);
     sessionStorage.setItem('sp_expiry', expiry);
+    if (data.scope != null) sessionStorage.setItem('sp_scope', data.scope);
     return true;
   }
   return false;
@@ -1337,6 +1500,397 @@ function msToTime(ms) {
   return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 }
 
+// ── SPOTIFY LIBRARY BROWSER ───────────────────────────────────────────────────
+// Lists the user's playlists and Liked Songs so songs can be assigned to a zone
+// with a click instead of pasting URLs. open.spotify.com refuses to load inside
+// a frame, so the same data comes from the Web API and is drawn here.
+const LIBRARY_SCOPES = ['playlist-read-private', 'playlist-read-collaborative', 'user-library-read'];
+const LIKED_SONGS = 'liked';
+const LIKED_SONGS_URL = 'https://open.spotify.com/collection/tracks';
+const OWN_PLAYLISTS_ONLY = "Spotify only lets apps read the songs in playlists you own or collaborate on. " +
+  "Add this playlist's songs to your Liked Songs (or to a playlist of your own) to pick them here.";
+
+const lib = {
+  zoneId: null,          // zone that clicked songs are added to
+  meId: null,            // Spotify user id, to tell own playlists from followed ones
+  playlists: null,       // null until the first page has loaded
+  playlistsNext: null,
+  loadingSources: false,
+  sourcesError: null,
+  gen: 0,                // bumped whenever another list is opened, to drop stale pages
+  sourceId: null,        // playlist id or LIKED_SONGS
+  source: null,          // the open playlist object (null for Liked Songs)
+  tracks: [],
+  tracksNext: null,
+  tracksLoaded: false,
+  loadingTracks: null,   // in-flight page request, so callers can await it
+  tracksError: null,
+};
+let libBackdropDown = false;
+
+// GET from the Web API. Paging links are absolute URLs; the token is only ever
+// sent to api.spotify.com.
+async function spotifyApi(pathOrUrl, retried = false) {
+  const url = pathOrUrl.startsWith('/') ? 'https://api.spotify.com/v1' + pathOrUrl : pathOrUrl;
+  if (!url.startsWith('https://api.spotify.com/')) throw new Error('Unexpected Spotify URL');
+  await ensureToken();
+  const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + spotifyToken } });
+  if (res.status === 401 && !retried && await refreshToken().catch(() => false)) {
+    return spotifyApi(url, true);
+  }
+  if (!res.ok) {
+    const err = new Error(await spotifyErrorText(res));
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+// Logins from before the library browser existed lack these scopes
+function hasLibraryScopes() {
+  const granted = (sessionStorage.getItem('sp_scope') || '').split(' ');
+  return LIBRARY_SCOPES.every(s => granted.includes(s));
+}
+
+function openLibrary(zoneId) {
+  if (!spotifyToken) {
+    showToast('Connect Spotify to browse your playlists');
+    document.getElementById('spOverlay').classList.remove('hidden');
+    return;
+  }
+  lib.zoneId = getZone(zoneId) ? zoneId : getZone(lib.zoneId) ? lib.zoneId : selectedZoneId;
+  const sel = document.getElementById('libZoneSelect');
+  sel.innerHTML = zones.map(z => `<option value="${z.id}">${esc(z.name)}</option>`).join('');
+  sel.value = lib.zoneId ?? '';
+  updateLibraryZoneDot();
+  document.getElementById('libNotice').hidden = hasLibraryScopes();
+  document.getElementById('libOverlay').classList.remove('hidden');
+  renderLibraryTracks(); // zones may have changed since it was last open
+  loadLibrarySources(true); // pick up playlists made since last time
+}
+
+function closeLibrary() {
+  document.getElementById('libOverlay').classList.add('hidden');
+}
+
+function updateLibraryZoneDot() {
+  const z = getZone(lib.zoneId);
+  document.getElementById('libZoneDot').style.background = z ? z.color : 'transparent';
+}
+
+function libraryError(e) {
+  if (e.status === 401 || (e.status === 403 && !hasLibraryScopes())) {
+    return { text: 'Reconnect Spotify so ZoneTune can read your playlists and Liked Songs.', action: 'reconnect' };
+  }
+  return { text: e.message, action: 'retry' };
+}
+
+function libraryErrorHtml(err, retryAction) {
+  const btn = err.action === 'reconnect'
+    ? '<button class="btn" data-action="reconnect">Reconnect Spotify</button>'
+    : err.action === 'retry'
+      ? `<button class="btn btn-secondary" data-action="${retryAction}">Try again</button>`
+      : '';
+  return `<div class="lib-empty">${esc(err.text)}${btn ? '<br>' + btn : ''}</div>`;
+}
+
+async function loadLibrarySources(reset = false) {
+  if (lib.loadingSources) return;
+  lib.loadingSources = true;
+  lib.sourcesError = null;
+  renderLibrarySources();
+  try {
+    if (!lib.meId) lib.meId = await spotifyApi('/me').then(u => u.id, () => null);
+    const page = await spotifyApi((!reset && lib.playlistsNext) || '/me/playlists?limit=50');
+    const items = (page.items || []).filter(Boolean);
+    lib.playlists = reset ? items : [...(lib.playlists || []), ...items];
+    lib.playlistsNext = page.next;
+  } catch (e) {
+    lib.sourcesError = libraryError(e);
+  } finally {
+    lib.loadingSources = false;
+    renderLibrarySources();
+  }
+}
+
+function canReadPlaylist(p) {
+  return !lib.meId || p.owner?.id === lib.meId || p.collaborative;
+}
+
+function smallestImage(images) {
+  return images?.length ? images[images.length - 1].url : null; // Spotify sorts largest first
+}
+
+function renderLibrarySources() {
+  const html = [`
+    <button class="lib-source${lib.sourceId === LIKED_SONGS ? ' on' : ''}" data-source="${LIKED_SONGS}">
+      <span class="lib-cover liked">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      </span>
+      <span class="lib-source-text">
+        <span class="lib-source-name">Liked Songs</span>
+        <span class="lib-source-meta">Your saved songs</span>
+      </span>
+    </button>`];
+
+  (lib.playlists || []).forEach(p => {
+    const readable = canReadPlaylist(p);
+    const img = smallestImage(p.images);
+    const total = (p.items || p.tracks)?.total; // `tracks` is the pre-2026 field name
+    const meta = !readable
+      ? `by ${esc(p.owner?.display_name || 'someone else')} · songs hidden`
+      : total != null ? `${total} song${total !== 1 ? 's' : ''}` : 'Playlist';
+    html.push(`
+      <button class="lib-source${lib.sourceId === p.id ? ' on' : ''}${readable ? '' : ' locked'}" data-source="${esc(p.id)}">
+        <span class="lib-cover">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : '♫'}</span>
+        <span class="lib-source-text">
+          <span class="lib-source-name">${esc(p.name || 'Untitled playlist')}</span>
+          <span class="lib-source-meta">${meta}</span>
+        </span>
+      </button>`);
+  });
+
+  if (lib.loadingSources) html.push('<div class="lib-empty">Loading playlists…</div>');
+  else if (lib.sourcesError) html.push(libraryErrorHtml(lib.sourcesError, 'more-sources'));
+  else if (lib.playlistsNext) html.push('<button class="btn btn-secondary lib-more" data-action="more-sources">More playlists</button>');
+
+  document.getElementById('libSources').innerHTML = html.join('');
+}
+
+function openLibrarySource(id) {
+  lib.gen++;
+  lib.sourceId = id;
+  lib.source = (lib.playlists || []).find(p => p.id === id) || null;
+  lib.tracks = [];
+  lib.tracksNext = null;
+  lib.tracksLoaded = false;
+  lib.loadingTracks = null;
+  lib.tracksError = null;
+  document.getElementById('libFilter').value = '';
+  document.getElementById('libBody').classList.add('showing-tracks');
+  renderLibrarySources();
+
+  if (lib.source && !canReadPlaylist(lib.source)) {
+    lib.tracksError = { text: OWN_PLAYLISTS_ONLY, action: null };
+    renderLibraryTracks();
+    return;
+  }
+  loadLibraryTracksPage();
+}
+
+// Loads the next page of the open list. Resolves to false when nothing was
+// added (it failed, the list is complete, or another list was opened meanwhile).
+function loadLibraryTracksPage() {
+  if (lib.loadingTracks) return lib.loadingTracks;
+  if (!lib.sourceId || (lib.tracksLoaded && !lib.tracksNext)) return Promise.resolve(false);
+
+  const gen = lib.gen;
+  const url = lib.tracksNext || (lib.sourceId === LIKED_SONGS
+    ? '/me/tracks?limit=50'
+    : `/playlists/${encodeURIComponent(lib.sourceId)}/items?limit=50`);
+  lib.tracksError = null;
+  lib.loadingTracks = spotifyApi(url).then(page => {
+    if (gen !== lib.gen) return false;
+    lib.tracks.push(...(page.items || []).map(libraryTrackFromEntry).filter(Boolean));
+    lib.tracksNext = page.next;
+    lib.tracksLoaded = true;
+    return true;
+  }, e => {
+    if (gen === lib.gen) lib.tracksError = libraryError(e);
+    return false;
+  }).finally(() => {
+    if (gen !== lib.gen) return;
+    lib.loadingTracks = null;
+    renderLibraryTracks();
+  });
+  renderLibraryTracks();
+  return lib.loadingTracks;
+}
+
+// Playlist entries hold the song in `item` (`track` before the 2026 API change);
+// Liked Songs entries hold it in `track`.
+function libraryTrackFromEntry(entry) {
+  const t = entry?.item || entry?.track;
+  if (!t) return null; // removed from Spotify
+  const local = entry.is_local || t.is_local;
+  const playable = t.type === 'track' && !local && /^[A-Za-z0-9]+$/.test(t.id || '');
+  return {
+    id: playable ? t.id : null,
+    uri: playable ? 'spotify:track:' + t.id : null,
+    name: t.name || 'Untitled',
+    artists: (t.artists || []).map(a => a.name).join(', '),
+    album: t.album?.name || '',
+    art: smallestImage(t.album?.images),
+    duration: t.duration_ms || 0,
+    playable,
+    reason: local ? "Local file — Spotify can't stream it"
+          : t.type === 'episode' ? "Podcast episodes can't be added to zones" : '',
+  };
+}
+
+function visibleLibraryTracks() {
+  const q = document.getElementById('libFilter').value.trim().toLowerCase();
+  if (!q) return lib.tracks;
+  return lib.tracks.filter(t => `${t.name} ${t.artists} ${t.album}`.toLowerCase().includes(q));
+}
+
+function zoneHasTrack(z, uri) {
+  return z.playlist.some(t => t.uri === uri);
+}
+
+function renderLibraryTracks() {
+  const liked = lib.sourceId === LIKED_SONGS;
+  const p = lib.source;
+  const spUrl = liked ? LIKED_SONGS_URL : p?.external_urls?.spotify || '';
+  const openLink = document.getElementById('libOpenSp');
+  openLink.hidden = !spUrl.startsWith('https://open.spotify.com/');
+  if (!openLink.hidden) openLink.href = spUrl;
+  document.getElementById('libSrcName').textContent = liked ? 'Liked Songs' : p?.name || 'Songs';
+  document.getElementById('libFilterRow').hidden = !lib.sourceId;
+
+  const el = document.getElementById('libTracks');
+  const addAll = document.getElementById('libAddAll');
+  if (!lib.sourceId) {
+    el.innerHTML = `<div class="lib-empty">Pick a playlist to see its songs.<br>
+      Click a song to add it to the zone. Click it again to take it out.</div>`;
+    addAll.hidden = true;
+    return;
+  }
+
+  const z = getZone(lib.zoneId);
+  const shown = visibleLibraryTracks();
+  let html = shown.map(t => `
+    <button class="lib-track${z && t.playable && zoneHasTrack(z, t.uri) ? ' added' : ''}"
+      ${t.playable ? `data-track="${t.id}" aria-pressed="${!!z && zoneHasTrack(z, t.uri)}"` : `disabled title="${esc(t.reason)}"`}>
+      <span class="lib-cover">${t.art ? `<img src="${esc(t.art)}" alt="" loading="lazy">` : '♫'}</span>
+      <span class="lib-track-text">
+        <span class="lib-track-name">${esc(t.name)}</span>
+        <span class="lib-track-artist">${esc(t.reason || [t.artists, t.album].filter(Boolean).join(' · '))}</span>
+      </span>
+      <span class="lib-track-dur">${t.duration ? msToTime(t.duration) : ''}</span>
+      <span class="lib-track-act" aria-hidden="true"></span>
+    </button>`).join('');
+
+  if (lib.loadingTracks) html += '<div class="lib-empty">Loading songs…</div>';
+  else if (lib.tracksError) html += libraryErrorHtml(lib.tracksError, 'more-tracks');
+  else if (lib.tracksNext) html += '<button class="btn btn-secondary lib-more" data-action="more-tracks">Load more songs</button>';
+  else if (!shown.length) html += `<div class="lib-empty">${lib.tracks.length ? 'No songs match your filter.' : 'No songs here yet.'}</div>`;
+
+  el.innerHTML = html;
+  addAll.hidden = !shown.some(t => t.playable);
+}
+
+// Refresh the added/not-added marks without rebuilding the list (keeps focus)
+function updateLibraryTrackRows() {
+  const z = getZone(lib.zoneId);
+  document.querySelectorAll('#libTracks .lib-track[data-track]').forEach(btn => {
+    const added = !!z && zoneHasTrack(z, 'spotify:track:' + btn.dataset.track);
+    btn.classList.toggle('added', added);
+    btn.setAttribute('aria-pressed', String(added));
+  });
+}
+
+// Same shape addTrack() stores for a pasted Spotify URL
+function zoneTrackFromLibrary(t) {
+  return {
+    url: 'https://open.spotify.com/track/' + t.id,
+    uri: t.uri,
+    label: t.artists ? `${t.name} — ${t.artists}` : t.name,
+    type: 'spotify',
+    volume: 100,
+  };
+}
+
+function toggleLibraryTrack(id) {
+  const z = getZone(lib.zoneId);
+  if (!z) { showToast('Add a zone first'); return; }
+  const t = lib.tracks.find(x => x.id === id);
+  if (!t) return;
+
+  const idx = z.playlist.findIndex(x => x.uri === t.uri);
+  if (idx >= 0) {
+    removeTrack(z.id, idx);
+    showToast(`Removed from ${z.name}: ${t.name}`);
+  } else {
+    if (z.playlist.length >= MAX_ZONE_TRACKS) { showToast(`Max ${MAX_ZONE_TRACKS} tracks per zone`); return; }
+    z.playlist.push(zoneTrackFromLibrary(t));
+    saveZones();
+    render();
+    showToast(`Added to ${z.name}: ${t.name}`);
+  }
+  updateLibraryTrackRows();
+}
+
+// Songs in the open list (matching the filter) that the zone doesn't have yet
+function missingLibraryTracks(z) {
+  const have = new Set(z.playlist.map(t => t.uri));
+  return visibleLibraryTracks().filter(t => {
+    if (!t.playable || have.has(t.uri)) return false;
+    have.add(t.uri); // a playlist can list the same song twice
+    return true;
+  });
+}
+
+async function addAllLibraryTracks() {
+  const z = getZone(lib.zoneId);
+  if (!z) { showToast('Add a zone first'); return; }
+  const gen = lib.gen;
+  const btn = document.getElementById('libAddAll');
+  btn.disabled = true;
+  try {
+    // Fetch the rest of the list, but only as much as the zone still has room for
+    while (lib.tracksNext && missingLibraryTracks(z).length < MAX_ZONE_TRACKS - z.playlist.length) {
+      if (!await loadLibraryTracksPage()) break;
+    }
+    if (gen !== lib.gen) return;
+
+    const room = MAX_ZONE_TRACKS - z.playlist.length;
+    const toAdd = missingLibraryTracks(z).slice(0, room);
+    if (!toAdd.length) {
+      showToast(room ? `Everything here is already in ${z.name}` : `${z.name} is full (max ${MAX_ZONE_TRACKS} tracks)`);
+      return;
+    }
+    z.playlist.push(...toAdd.map(zoneTrackFromLibrary));
+    saveZones();
+    render();
+    updateLibraryTrackRows();
+    showToast(`Added ${toAdd.length} song${toAdd.length !== 1 ? 's' : ''} to ${z.name}` +
+      (z.playlist.length >= MAX_ZONE_TRACKS ? ` (zone is now full: max ${MAX_ZONE_TRACKS})` : ''));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+(() => {
+  const overlay = document.getElementById('libOverlay');
+  // Only close on a click that started on the backdrop (not a text drag that ended there)
+  overlay.addEventListener('pointerdown', e => { libBackdropDown = e.target === overlay; });
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) { if (libBackdropDown) closeLibrary(); return; }
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.source) openLibrarySource(btn.dataset.source);
+    else if (btn.dataset.track) toggleLibraryTrack(btn.dataset.track);
+    else switch (btn.dataset.action) {
+      case 'close':        closeLibrary(); break;
+      case 'back':         document.getElementById('libBody').classList.remove('showing-tracks'); break;
+      case 'add-all':      addAllLibraryTracks(); break;
+      case 'more-sources': loadLibrarySources(); break;
+      case 'more-tracks':  loadLibraryTracksPage(); break;
+      case 'reconnect':    startSpotifyAuth(); break;
+    }
+  });
+  document.getElementById('libZoneSelect').addEventListener('change', e => {
+    lib.zoneId = +e.target.value;
+    updateLibraryZoneDot();
+    updateLibraryTrackRows();
+  });
+  document.getElementById('libFilter').addEventListener('input', renderLibraryTracks);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeLibrary();
+  });
+})();
+
 // ── PERSON MARKER ────────────────────────────────────────────────────────────
 let personMarker  = null;
 let personVisible = false;
@@ -1536,6 +2090,12 @@ async function onPersonZoneChange(zoneId) {
 
 // ── SPOTIFY INIT ON LOAD ──────────────────────────────────────────────────────
 async function initSpotify() {
+  // Tokens issued to a different Spotify app (SP_CLIENT_ID changed) are rejected,
+  // and its refresh token can't be renewed with this ID, so log in again
+  if (sessionStorage.getItem('sp_client') !== SP_CLIENT_ID) {
+    ['sp_token', 'sp_expiry', 'sp_refresh', 'sp_scope'].forEach(k => sessionStorage.removeItem(k));
+  }
+
   // Check for auth code callback
   const params  = new URLSearchParams(window.location.search);
   const code    = params.get('code');

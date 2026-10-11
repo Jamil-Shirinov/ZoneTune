@@ -51,7 +51,7 @@
       <svg viewBox="0 0 24 24" fill="white"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
     </div>
     <div class="sp-title">Connect Spotify</div>
-    <div class="sp-sub">ZoneTune needs access to your Spotify account to play music when your person enters a zone.<br><br>You'll need a <strong>Spotify Premium</strong> account for playback.</div>
+    <div class="sp-sub">ZoneTune needs access to your Spotify account to play music when your person enters a zone, and to let you pick songs for each zone from your playlists and Liked Songs.<br><br>You'll need a <strong>Spotify Premium</strong> account for playback.</div>
     <button class="sp-btn" onclick="startSpotifyAuth()">
       <svg viewBox="0 0 24 24" fill="white"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
       Login with Spotify
@@ -154,6 +154,43 @@
     <div class="map-loading" id="mapLoading">
       <div class="spinner"></div>
       <div class="loading-txt">Loading map…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Spotify library browser: pick songs for a zone from your playlists -->
+<div class="lib-overlay hidden" id="libOverlay">
+  <div class="lib-modal" role="dialog" aria-modal="true" aria-labelledby="libTitle">
+    <div class="lib-head">
+      <div class="lib-title" id="libTitle">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#1DB954"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
+        My Spotify
+      </div>
+      <label class="lib-zone-pick">
+        Add to
+        <span class="chip-dot" id="libZoneDot"></span>
+        <select id="libZoneSelect" aria-label="Zone to add songs to"></select>
+      </label>
+      <button class="lib-close" data-action="close" title="Close" aria-label="Close">✕</button>
+    </div>
+    <div class="lib-notice" id="libNotice" hidden>
+      <span>Reconnect Spotify so ZoneTune can see your private playlists and Liked Songs.</span>
+      <button class="btn" data-action="reconnect">Reconnect</button>
+    </div>
+    <div class="lib-body" id="libBody">
+      <div class="lib-sources" id="libSources"></div>
+      <div class="lib-tracks-pane">
+        <div class="lib-tracks-head">
+          <button class="lib-back" data-action="back" aria-label="Back to playlists">←</button>
+          <div class="lib-src-name" id="libSrcName">Songs</div>
+          <a class="lib-open" id="libOpenSp" target="_blank" rel="noopener" hidden>Open in Spotify ↗</a>
+          <button class="btn lib-add-all" id="libAddAll" data-action="add-all" hidden>Add all</button>
+        </div>
+        <div class="lib-filter-row" id="libFilterRow" hidden>
+          <input class="add-inp" id="libFilter" placeholder="Filter songs…" autocomplete="off" aria-label="Filter songs">
+        </div>
+        <div class="lib-tracks" id="libTracks"></div>
+      </div>
     </div>
   </div>
 </div>

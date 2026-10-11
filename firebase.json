@@ -10,7 +10,8 @@
       "actualProjectStuff/**",
       "files/**",
       "ideas for projects",
-      "LICENSE"
+      "LICENSE",
+      "dev-server.js"
     ]
   }
 }
