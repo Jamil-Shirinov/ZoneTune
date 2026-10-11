@@ -303,6 +303,13 @@ let lastMapMouseMove = null;
 map.on('mousemove', e => { lastMapMouseMove = e; });
 map.on('mouseout', () => { lastMapMouseMove = null; });
 
+// While a draw handler is active, Leaflet blocks 'selectstart' on window, which stops
+// Ctrl+A / mouse selection inside text fields. Keep the event from reaching window
+// when it starts in an input, so zone, group and track fields stay selectable.
+document.addEventListener('selectstart', e => {
+  if (e.target.closest?.('input, textarea, [contenteditable="true"]')) e.stopPropagation();
+});
+
 // Press Q while drawing to discard the in-progress shape and start over
 document.addEventListener('keydown', e => {
   if ((e.key !== 'q' && e.key !== 'Q') || e.ctrlKey || e.metaKey || e.altKey) return;
