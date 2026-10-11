@@ -309,6 +309,15 @@ map.on('mouseout', () => { lastMapMouseMove = null; });
 document.addEventListener('selectstart', e => {
   if (e.target.closest?.('input, textarea, [contenteditable="true"]')) e.stopPropagation();
 });
+// Ctrl+A's selectstart isn't targeted at the input, so the block above misses it;
+// select the field's text ourselves instead
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || (e.key || '').toLowerCase() !== 'a') return;
+  const t = e.target;
+  if (!t.matches?.('input:not([type="range"]):not([type="checkbox"]), textarea')) return;
+  e.preventDefault();
+  t.select();
+});
 
 // Press Q while drawing to discard the in-progress shape and start over
 document.addEventListener('keydown', e => {
