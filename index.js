@@ -114,8 +114,47 @@ async function advanceQueue() {
   await playQueueItem(queue[queueIndex]);
 }
 
+// ── ZONE PLAYBACK GUARD ───────────────────────────────────────────────────────
+// zoneGen changes every time the person's zone changes, and playGen/playType record
+// which zoneGen the current music was started for and on which player. Music that
+// starts for a zone the person has already left (a play request or SoundCloud load
+// still in flight when they walked out), or on the other player, is paused the
+// moment it starts playing.
+let zoneGen = 0;
+let playGen = 0;
+let playType = null; // 'spotify' | 'soundcloud'; null until something has been played
+
+function mayPlay(type) {
+  return playGen === zoneGen && (!playType || playType === type);
+}
+// Zone starts run one at a time, so a slow start for the zone the person just
+// left can't land after the next zone's start and play the wrong zone's music
+let playbackChain = Promise.resolve();
+
+function queuePlayback(fn) {
+  const run = playbackChain.then(fn);
+  // A hung request must not block every later zone
+  playbackChain = Promise.race([run, new Promise(r => setTimeout(r, 10000))]).catch(() => {});
+  return run;
+}
+
+// Stops both players. Spotify is asked for its real state: currentlyPlaying stays
+// false until a play request has finished starting up.
+function stopZoneMusic() {
+  pendingSpotifyTrack = null;
+  if (scWidget && scReady) scWidget.pause();
+  if (spotifyPlayer) {
+    spotifyPlayer.getCurrentState()
+      .then(state => { if (state && !state.paused) return spotifyPlayer.pause(); })
+      .catch(() => {});
+  }
+}
+
 async function playQueueItem(track) {
   if (!track) return;
+  // This music belongs to the person's current zone
+  playGen = zoneGen;
+  playType = track.type;
   const vol = (track.volume ?? 100) / 100;
   syncVolumeSlider(track.volume ?? 100);
   if (track.type === 'spotify') {
@@ -420,6 +459,7 @@ map.on(L.Draw.Event.CREATED, function(e) {
   saveZones();
 
   render();
+  checkPersonZone(); // the redrawn shape may now include or exclude the person
 
   // Auto-advance to next unmapped zone
   const next = zones.find(z2 => !z2.layer && z2.id !== selectedZoneId);
@@ -602,6 +642,7 @@ function deleteZone(id) {
   if (selectedZoneId === id) selectedZoneId = zones[0]?.id ?? null;
   render();
   updateChip();
+  checkPersonZone(); // the person may have been standing in the deleted zone
 }
 
 function detectTrackType(url) {
@@ -863,6 +904,7 @@ function clearAllZones() {
   zones.forEach(z => { if (z.layer) { drawnItems.removeLayer(z.layer); z.layer = null; } });
   saveZones();
   render();
+  checkPersonZone(); // with no shapes left, the person is outside every zone
   if (mode === 'draw') startDraw();
 }
 
@@ -1357,6 +1399,8 @@ function initPlayer() {
 
   spotifyPlayer.addListener('player_state_changed', state => {
     if (!state) return;
+    // Started for a zone the person has already left (see zoneGen)
+    if (!state.paused && !mayPlay('spotify')) spotifyPlayer.pause().catch(() => {});
     // Only update UI,  on't advance queue — advanceQueue is called explicitly
     updatePlayerUI(state);
   });
@@ -1505,6 +1549,9 @@ async function spotifyErrorText(res) {
 
 async function spotifyTogglePlay() {
   const track = queue[queueIndex];
+  // Pressing play by hand is allowed even outside a zone
+  playGen = zoneGen;
+  playType = track?.type === 'soundcloud' ? 'soundcloud' : 'spotify';
   if (track?.type === 'soundcloud') {
     if (scWidget && scReady) scWidget.toggle();
   } else {
@@ -1595,8 +1642,9 @@ function updatePlayerUI(state) {
   // Progress
   updateProgress(state.position, state.duration);
 
-  // Show player bar
-  document.getElementById('nowPlaying').classList.add('show');
+  // Show player bar (only for playing music: pausing as the person is removed
+  // from the map must not bring back the bar removePerson() just hid)
+  if (!state.paused) document.getElementById('nowPlaying').classList.add('show');
 
   // Kick off local progress timer
   clearInterval(progressTimer);
@@ -2111,6 +2159,10 @@ function removePerson() {
   if (personMarker) { map.removeLayer(personMarker); personMarker = null; }
   personVisible = false;
   currentZoneId = null;
+  // No person, no zone: stop the music (the player bar is hidden below, so it
+  // couldn't be paused by hand either)
+  zoneGen++;
+  stopZoneMusic();
   document.getElementById('btnPerson').classList.remove('on');
   document.getElementById('btnPersonLabel').textContent = 'Add Person';
   document.getElementById('nowPlaying').classList.remove('show');
@@ -2209,13 +2261,13 @@ function pointInLeafletPolygon(latlng, layer) {
 }
 
 async function onPersonZoneChange(zoneId) {
+  const gen = ++zoneGen;
   const pulse = document.getElementById('personPulse');
   if (pulse) pulse.classList.toggle('in-zone', !!zoneId);
   pendingSpotifyTrack = null; // a track waiting for the player belongs to the old zone
 
   if (!zoneId) {
-    if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
-    if (scWidget && scReady) scWidget.pause();
+    stopZoneMusic();
     document.getElementById('npZoneLabel').textContent = 'Outside zones';
     return;
   }
@@ -2228,17 +2280,19 @@ async function onPersonZoneChange(zoneId) {
   document.getElementById('nowPlaying').classList.add('show');
 
   if (z.playlist && z.playlist.length > 0) {
-    buildQueue(z);
     try {
-      await advanceQueue();
+      await queuePlayback(async () => {
+        if (gen !== zoneGen) return; // the person moved on while an earlier start finished
+        buildQueue(z);
+        await advanceQueue();
+      });
     } catch (e) {
       // This runs un-awaited from the drag/GPS handlers, so surface failures
       console.error('Could not start zone music', e);
       showToast('Could not start music: ' + (e?.message || e), 6000);
     }
   } else {
-    if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
-    if (scWidget && scReady) scWidget.pause();
+    stopZoneMusic();
     document.getElementById('npTrack').textContent = 'No tracks assigned';
     document.getElementById('npArtist').textContent = '';
   }
@@ -2307,6 +2361,8 @@ function initSoundcloud() {
     advanceQueue();
   });
   scWidget.bind(SC.Widget.Events.PLAY, () => {
+    // Loaded for a zone the person has already left (see zoneGen)
+    if (!mayPlay('soundcloud')) { scWidget.pause(); return; }
     console.log('SC PLAY event fired');
     scWidget.setVolume(pendingScVolume);
     updatePlayerUIForSoundcloud();
