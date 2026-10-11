@@ -10,7 +10,8 @@ const firebaseConfig = {
 
 
 const SP_CLIENT_ID = 'e3398d1a2bb140299e744f2d8e0cf8dd';
-const SP_REDIRECT_URI = window.location.origin + '/';
+// Keep the path so the redirect works when hosted in a subfolder (e.g. GitHub Pages /ZoneTune/)
+const SP_REDIRECT_URI = window.location.origin + window.location.pathname.replace(/index\.html$/, '');
 const SP_SCOPES = [
   'streaming',
   'user-read-email',
@@ -243,6 +244,7 @@ let nextGroupId = 1;
 let selectedZoneId = zones[0].id;   // ← must come AFTER zones is defined
 let mode = 'draw';
 let drawHandler = null;
+let drawVertexCount = 0;
 let gpsWatchId = null;
 let isGpsActive = false;
 
@@ -251,6 +253,9 @@ const map = L.map('map', {
   center: [37.871994, -122.257884], // Berkeley, CA (lat, lng)
   zoom: 13,
   zoomControl: true,
+  // iOS-only long-press-to-right-click. Tapping a shape's first point to finish it leaves this
+  // timer running, and it then swallows the next tap anywhere on the page. Nothing here uses it.
+  tapHold: false,
 });
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -292,8 +297,111 @@ function startDraw() {
     drawError: { color: '#ff5757', timeout: 1000 },
     guidelineDistance: 20,
   });
+  drawVertexCount = 0;
   drawHandler.enable();
+  placeDrawCursor();
+  updateDrawControls();
 }
+
+// Phones and tablets: no mouse to hover with and no keyboard for the Q shortcut
+const isTouchScreen = matchMedia('(hover: none) and (pointer: coarse)').matches;
+
+// Leaflet.draw's hints are written for a mouse; reword them for touch screens and mention Q on desktop
+const polygonTips = L.drawLocal.draw.handlers.polygon.tooltip;
+for (const k of ['start', 'cont', 'end']) {
+  if (isTouchScreen) polygonTips[k] = polygonTips[k].replace(/^Click/, 'Tap');
+  else if (k !== 'start') polygonTips[k] += '<br>Press Q to start over.';
+}
+
+map.on(L.Draw.Event.DRAWVERTEX, e => {
+  drawVertexCount = e.layers.getLayers().length;
+  updateDrawControls();
+});
+
+// Last cursor position over the map, so a restarted draw handler can pick it up
+let lastMapMouseMove = null;
+map.on('mousemove', e => { if (!e.synthetic) lastMapMouseMove = e; });
+map.on('mouseout', () => { lastMapMouseMove = null; });
+
+// While a draw handler is active, Leaflet blocks 'selectstart' on window, which stops
+// Ctrl+A / mouse selection inside text fields. Keep the event from reaching window
+// when it starts in an input, so zone, group and track fields stay selectable.
+document.addEventListener('selectstart', e => {
+  if (e.target.closest?.('input, textarea, [contenteditable="true"]')) e.stopPropagation();
+});
+// Ctrl+A's selectstart isn't targeted at the input, so the block above misses it;
+// select the field's text ourselves instead
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || (e.key || '').toLowerCase() !== 'a') return;
+  const t = e.target;
+  if (!t.matches?.('input:not([type="range"]):not([type="checkbox"]), textarea')) return;
+  e.preventDefault();
+  t.select();
+});
+
+// A fresh draw handler leaves its hint in the map's top-left corner (half under the toolbar) and its
+// click-catching marker at the map center until the mouse moves, so the map acts like Navigate mode
+// until then. Put both under the cursor, or in the middle of the map when there is no cursor.
+function placeDrawCursor() {
+  if (!drawHandler) return;
+  if (lastMapMouseMove && !isTouchScreen) {
+    map.fire('mousemove', lastMapMouseMove);
+    return;
+  }
+  const r = map.getContainer().getBoundingClientRect();
+  map.fire('mousemove', {
+    synthetic: true,
+    originalEvent: { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 },
+  });
+}
+
+// Throw away the unfinished shape and keep drawing the same zone. The zone keeps its previous
+// shape, if it had one. Returns false when no shape is in progress.
+function restartDrawing() {
+  if (mode !== 'draw' || !drawHandler || drawVertexCount === 0) return false;
+  startDraw();
+  showToast('Drawing cleared — start over');
+  return true;
+}
+
+// Drawing controls in the map's corner: a "Start over" button while a shape is in progress (the only
+// way to restart on a phone) and, on touch screens, the drawing hint. Leaflet.draw's own hint sits
+// beside the last point, i.e. under the finger, and runs off the edge of a phone screen.
+const DrawPanel = L.Control.extend({
+  options: { position: 'topright' },
+  onAdd() {
+    const panel = L.DomUtil.create('div', 'draw-panel');
+    panel.innerHTML = `
+      <div class="draw-hint"></div>
+      <button type="button" class="tool-btn draw-restart-btn" title="${isTouchScreen ? 'Start over' : 'Start over (Q)'}">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+        Start over
+      </button>`;
+    L.DomEvent.disableClickPropagation(panel);
+    L.DomEvent.on(panel.querySelector('button'), 'click', e => { L.DomEvent.stop(e); restartDrawing(); });
+    return panel;
+  },
+});
+const drawPanel = new DrawPanel().addTo(map).getContainer();
+const restartBtn = drawPanel.querySelector('.draw-restart-btn');
+const drawHint = drawPanel.querySelector('.draw-hint');
+
+function updateDrawControls() {
+  const drawing = mode === 'draw' && !!drawHandler;
+  restartBtn.classList.toggle('show', drawing && drawVertexCount > 0);
+  drawHint.classList.toggle('show', drawing && isTouchScreen);
+  // Same wording Leaflet.draw would show for this many points
+  drawHint.textContent = drawVertexCount === 0 ? polygonTips.start
+    : drawVertexCount < 3 ? polygonTips.cont : polygonTips.end;
+}
+
+// Press Q while drawing to discard the in-progress shape and start over
+document.addEventListener('keydown', e => {
+  if ((e.key || '').toLowerCase() !== 'q' || e.ctrlKey || e.metaKey || e.altKey) return;
+  // Typing a "q" into a zone name, group name or track URL must not restart the drawing
+  if (e.target.closest?.('input:not([type="range"]), textarea, select, [contenteditable="true"]')) return;
+  if (restartDrawing()) e.preventDefault();
+});
 
 map.on(L.Draw.Event.CREATED, function(e) {
   if (!selectedZoneId) return;
@@ -324,27 +432,10 @@ map.on(L.Draw.Event.CREATED, function(e) {
   }
 });
 
-map.on(L.Draw.Event.DRAWSTOP, () => { drawHandler = null; });
-
-// ── CANCEL DRAWING WITH "Q" ───────────────────────────────────────────────────
-// Mention the shortcut in Leaflet.draw's cursor tooltip so people can find it
-const polygonTips = L.drawLocal.draw.handlers.polygon.tooltip;
-for (const k of ['start', 'cont', 'end']) polygonTips[k] += ' Press Q to cancel.';
-
-// Throws away the unfinished shape (the zone keeps its previous shape, if it had
-// one) and leaves Draw mode. Returns false when nothing was being drawn.
-function cancelDrawing() {
-  if (!drawHandler || !drawHandler.enabled()) return false;
-  setMode('nav'); // disabling the draw handler removes the half-drawn shape
-  showToast('Drawing cancelled');
-  return true;
-}
-
-document.addEventListener('keydown', e => {
-  if ((e.key || '').toLowerCase() !== 'q' || e.ctrlKey || e.metaKey || e.altKey) return;
-  // Typing a "q" into a zone name, group name or track URL must not cancel
-  if (e.target.closest?.('input:not([type="range"]), textarea, select, [contenteditable="true"]')) return;
-  if (cancelDrawing()) e.preventDefault();
+map.on(L.Draw.Event.DRAWSTOP, () => {
+  drawHandler = null;
+  drawVertexCount = 0;
+  updateDrawControls();
 });
 
 function applyStyle(layer, z, isSelected) {
@@ -433,9 +524,16 @@ function updateChip() {
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
+function nextDefaultZoneName() {
+  const taken = new Set(zones.map(z => z.name));
+  let n = 1;
+  while (taken.has(`Zone ${n}`)) n++;
+  return `Zone ${n}`;
+}
+
 function addZoneFromInput() {
   const inp = document.getElementById('newZoneName');
-  const name = sanitizeName(inp.value.trim()) || `Zone ${nextId}`;
+  const name = sanitizeName(inp.value.trim()) || nextDefaultZoneName();
   const color = COLORS[zones.length % COLORS.length];
   const z = { id: nextId++, name, color, playlist: [], shuffle: false, layer: null, groupId: null };
   zones.push(z);
@@ -462,6 +560,23 @@ function addGroup() {
   render();
 }
 
+
+// Returns the group's name after the attempt, so the caller can revert a rejected edit
+function renameGroup(id, val) {
+  const g = groups.find(g => g.id === id);
+  if (!g) return '';
+  const name = sanitizeName(val.trim());
+  if (!name) return g.name;
+  if (groups.some(o => o.id !== id && o.name.toLowerCase() === name.toLowerCase())) {
+    showToast('Group already exists.');
+    return g.name;
+  }
+  if (name !== g.name) {
+    g.name = name;
+    saveZones();
+  }
+  return g.name;
+}
 
 function deleteGroup(id) {
   zones.forEach(z => { if (z.groupId === id) z.groupId = null; });
@@ -653,6 +768,9 @@ function renameZone(id, val) {
   z.name = val || 'Unnamed';
   saveZones();
   updateChip();
+  // Update the Music section label in place; a full render() would steal focus from the input
+  const musicLabel = document.querySelector(`.music-zone-name[data-zone="${id}"]`);
+  if (musicLabel) musicLabel.textContent = z.name;
   if (z.layer) attachLayerEvents(z.layer, z);
 }
 
@@ -753,41 +871,72 @@ let touchDragState = null;
 let touchDragJustEnded = false;
 const HOLD_DURATION_MS = 1000;
 
+// Zones whose name is being edited; every other zone shows its name as text and can be dragged
+const editingZoneIds = new Set();
+
+function startZoneEdit(id) {
+  editingZoneIds.add(id);
+  render();
+  const inp = document.querySelector(`.zone-row[data-zone-id="${id}"] .zone-name-inp`);
+  if (inp) { inp.focus(); inp.select(); }
+}
+
+function finishZoneEdit(id, val) {
+  renameZone(id, sanitizeName(val.trim()));
+  editingZoneIds.delete(id);
+  render();
+}
+
 function appendZoneRow(parent, z) {
+  const editing = editingZoneIds.has(z.id);
   const div = document.createElement('div');
-  div.className = 'zone-row' + (z.id === selectedZoneId ? ' selected' : '');
+  div.className = 'zone-row' + (z.id === selectedZoneId ? ' selected' : '') + (editing ? ' editing' : ' draggable');
   div.dataset.zoneId = z.id;
+  div.draggable = !editing;
   div.innerHTML = `
-    <div class="zone-pip zone-drag-handle" style="background:${z.color}" title="Hold to drag" draggable="true"></div>
-    <input class="zone-name-inp" value="${esc(z.name)}" maxlength="40" placeholder="Zone name">
+    <div class="zone-pip" style="background:${z.color}"></div>
+    ${editing
+      ? `<input class="zone-name-inp" value="${esc(z.name)}" maxlength="40" placeholder="Zone name">
+         <button class="zone-name-btn enter" title="Save name">Enter</button>`
+      : `<span class="zone-name" title="Drag onto a group to move">${esc(z.name)}</span>
+         <button class="zone-name-btn" title="Rename zone">Edit</button>`}
     <span class="zone-mapped" title="${z.layer ? 'Mapped' : 'Not drawn yet'}">${z.layer ? '◉' : '○'}</span>
     <button class="del-btn" title="Delete zone">✕</button>
   `;
-  const pip = div.querySelector('.zone-drag-handle');
-  div.querySelector('.zone-name-inp').addEventListener('input', e => renameZone(z.id, e.target.value));
+  const nameInp = div.querySelector('.zone-name-inp');
+  div.querySelector('.zone-name-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    if (editing) finishZoneEdit(z.id, nameInp.value);
+    else startZoneEdit(z.id);
+  });
+  if (editing) {
+    nameInp.addEventListener('input', e => renameZone(z.id, e.target.value));
+    nameInp.addEventListener('keydown', e => { if (e.key === 'Enter') finishZoneEdit(z.id, nameInp.value); });
+  }
   div.querySelector('.del-btn').addEventListener('click', e => { e.stopPropagation(); deleteZone(z.id); });
 
   function handleSelect(e) {
-    if (e.target.closest('.del-btn')) return;
-    if (e.target.closest('.zone-name-inp')) return;
+    if (e.target.closest('button, .zone-name-inp')) return;
     if (touchDragState || touchDragJustEnded) return;
     setSelected(z.id);
   }
   div.addEventListener('click', handleSelect);
   div.addEventListener('touchend', handleSelect, { passive: true });
 
-  // Mouse drag (desktop) - pip only
-  pip.addEventListener('dragstart', e => {
-    e.dataTransfer.setData('text/plain', z.id);
-    e.dataTransfer.effectAllowed = 'move';
-    div.classList.add('zone-dragging');
-  });
-  pip.addEventListener('dragend', () => div.classList.remove('zone-dragging'));
+  // Mouse drag (desktop): grab anywhere on a row whose name is finalized
+  if (!editing) {
+    div.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', z.id);
+      e.dataTransfer.effectAllowed = 'move';
+      div.classList.add('zone-dragging');
+    });
+    div.addEventListener('dragend', () => div.classList.remove('zone-dragging'));
+  }
 
-  // Touch drag (mobile): hold 1s anywhere on row (except input/delete) to enter drag mode
+  // Touch drag (mobile): hold 1s anywhere on a finalized row (except its buttons) to enter drag mode
   function touchStart(e) {
-    if (e.touches.length !== 1) return;
-    if (e.target.closest('.zone-name-inp') || e.target.closest('.del-btn')) return;
+    if (editing || e.touches.length !== 1) return;
+    if (e.target.closest('button')) return;
     const t = e.touches[0];
     touchDragState = {
       zoneId: z.id,
@@ -910,12 +1059,19 @@ function render() {
     section.className = 'group-section';
     section.innerHTML = `
       <div class="group-header drop-target" data-group-id="${g.id}">
-        <span class="group-name">${esc(g.name)}</span>
+        <input class="group-name-inp" value="${esc(g.name)}" maxlength="40" placeholder="Group name" title="Rename group">
         <button class="group-del-btn" title="Delete group">✕</button>
       </div>
       <div class="group-zones"></div>
     `;
     section.querySelector('.group-del-btn').addEventListener('click', e => { e.stopPropagation(); deleteGroup(g.id); });
+    // Commit on Enter or blur; Escape abandons the edit
+    const nameInp = section.querySelector('.group-name-inp');
+    nameInp.addEventListener('change', () => { nameInp.value = renameGroup(g.id, nameInp.value); });
+    nameInp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') nameInp.blur();
+      if (e.key === 'Escape') { nameInp.value = g.name; nameInp.blur(); }
+    });
     const gZones = zones.filter(z => z.groupId === g.id);
     gZones.forEach(z => appendZoneRow(section.querySelector('.group-zones'), z));
     setupDropTarget(section.querySelector('.group-header'), g.id);
@@ -957,7 +1113,7 @@ function render() {
     div.innerHTML = `
   <div class="music-header">
     <div class="music-pip" style="background:${z.color}"></div>
-    <span class="music-zone-name">${esc(z.name)}</span>
+    <span class="music-zone-name" data-zone="${z.id}">${esc(z.name)}</span>
     <button class="shuffle-btn ${z.shuffle ? 'on' : ''}" data-zone="${z.id}" title="Shuffle">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>

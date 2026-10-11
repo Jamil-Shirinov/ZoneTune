@@ -65,6 +65,13 @@ header {
   letter-spacing: 0.5px;
 }
 
+.signout-btn {
+  background: transparent; color: #ff5f5f;
+  border: 1px solid #ff5f5f; border-radius: 4px;
+  padding: 4px 12px; cursor: pointer;
+  margin-left: auto;
+}
+
 /* ── LAYOUT ── */
 .app {
   display: grid;
@@ -146,12 +153,8 @@ header {
 .add-group-row { display: flex; gap: 6px; margin-bottom: 8px; }
 .btn-secondary { background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); }
 .btn-secondary:hover { border-color: var(--border-hi); color: var(--text); }
-.zone-drag-handle {
-  cursor: grab;
-  touch-action: none;
-}
-.zone-drag-handle:active { cursor: grabbing; }
 .zone-row.draggable { cursor: grab; }
+.zone-row.draggable:active { cursor: grabbing; }
 .zone-row.zone-dragging {
   opacity: 0.7;
   touch-action: none;
@@ -179,14 +182,33 @@ header {
 
 .zone-name-inp {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
+  border-bottom: 1px solid var(--accent);
   color: var(--text);
   font-family: 'DM Mono', monospace;
   font-size: 12px;
   outline: none;
 }
 .zone-name-inp::placeholder { color: var(--text-dim); }
+
+.zone-name {
+  flex: 1; min-width: 0;
+  color: var(--text);
+  font-family: 'DM Mono', monospace; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zone-name-btn {
+  flex-shrink: 0;
+  background: none; border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer;
+  font-family: 'DM Mono', monospace; font-size: 10px;
+  padding: 2px 7px; border-radius: 4px;
+  transition: color .12s, border-color .12s;
+}
+.zone-name-btn:hover { color: var(--text); border-color: var(--border-hi); }
+.zone-name-btn.enter { background: var(--accent); border-color: var(--accent); color: #0a0a0c; }
 
 .zone-mapped { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
 
@@ -203,6 +225,7 @@ header {
 .add-row { display: flex; gap: 6px; }
 .add-inp {
   flex: 1;
+  min-width: 0; /* let the box shrink so its button never gets pushed out of a narrow sidebar */
   background: var(--surface2);
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -280,6 +303,7 @@ header {
 
 .map-toolbar {
   display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; /* wrap rather than push buttons off-screen in narrow windows */
   padding: 10px 16px; background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 500; flex-shrink: 0;
@@ -291,10 +315,26 @@ header {
   color: var(--text-muted); padding: 6px 11px;
   border-radius: 5px; font-family: 'DM Mono', monospace;
   font-size: 10px; cursor: pointer; transition: all .12s;
+  white-space: nowrap;
 }
 .tool-btn:hover { border-color: var(--border-hi); color: var(--text); }
 .tool-btn.on { background: var(--accent); color: #0a0a0c; border-color: var(--accent); }
 .tool-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+/* Drawing controls in the map's top-right corner (see DrawPanel in index.js) */
+.leaflet-control.draw-panel {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  pointer-events: none; /* only the button takes taps; the rest of the corner still draws */
+}
+.tool-btn.draw-restart-btn { display: none; pointer-events: auto; background: var(--surface); color: var(--text); border-color: var(--border-hi); box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+.tool-btn.draw-restart-btn.show { display: flex; }
+.draw-hint {
+  display: none; pointer-events: none; /* taps go through to the map */
+  max-width: 220px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(0,0,0,0.75); color: #fff;
+  font-size: 12px; line-height: 1.4; text-align: right;
+}
+.draw-hint.show { display: block; }
 
 .vsep { width: 1px; height: 22px; background: var(--border); }
 
@@ -915,7 +955,7 @@ header {
 
   .sidebar {
     order: 2;
-    max-height: 45vh;
+    max-height: 40vh;
     min-height: 0;
     border-right: none;
     border-top: 1px solid var(--border);
@@ -929,15 +969,14 @@ header {
   .panel { padding: 12px 14px; }
   .music-section { padding: 12px 14px; }
 
-  /* Map toolbar: wrap, larger touch targets */
+  /* Map toolbar: tight enough to fit in two rows on a 360px phone, larger touch targets */
   .map-toolbar {
-    padding: 8px 12px;
+    padding: 8px 10px;
     gap: 6px;
-    flex-wrap: wrap;
   }
 
   .tool-btn {
-    padding: 10px 12px;
+    padding: 10px 10px;
     font-size: 11px;
     min-height: 44px;
   }
@@ -979,6 +1018,7 @@ header {
   .zone-row { padding: 10px 12px; min-height: 44px; }
   .zone-row:hover .del-btn { opacity: 1; }
   .del-btn { opacity: 0.7; min-width: 32px; min-height: 32px; }
+  .zone-name-btn { min-height: 32px; padding: 4px 10px; }
 
   /* Add track row */
   .add-track-row { margin-top: 6px; }
@@ -1057,4 +1097,78 @@ header {
       border-radius: 50%;
       background: var(--accent);
       cursor: pointer; }
+}
+
+/* Leaflet.draw's hint sits beside the last point; on small or touch screens wrap it
+   instead of letting it run off the edge of the map */
+@media (max-width: 768px), (pointer: coarse) {
+  .leaflet-draw-tooltip { white-space: normal; width: max-content; max-width: 170px; }
+}
+
+/* Touch screens show the drawing hint in the map corner instead (errors still show by the point) */
+@media (hover: none) and (pointer: coarse) {
+  .leaflet-draw-tooltip:not(.leaflet-error-draw-tooltip) { display: none; }
+}
+
+/* Smallest phones: drop the toolbar icons so the buttons still fit in two rows */
+@media (max-width: 340px) {
+  .tool-btn:not(#btnSidebar) svg { display: none; }
+}
+
+/* ── TOUCH SCREENS (phones and tablets, either orientation) ───────────────── */
+@media (pointer: coarse) {
+  /* iOS Safari zooms the whole page into any text box smaller than 16px when it's tapped */
+  input:not([type="range"]) { font-size: 16px; }
+
+  /* Finger-sized tap targets, including on screens wide enough for the desktop layout */
+  .tool-btn { min-height: 44px; }
+  .btn, .add-inp, .spotify-inp, .add-track-btn { min-height: 40px; }
+  .signout-btn { min-height: 36px; }
+  .zone-row { min-height: 44px; }
+  .del-btn { opacity: 0.7; min-width: 32px; min-height: 32px; }
+  .zone-name-btn { min-height: 32px; padding: 4px 10px; }
+  .group-del-btn { min-width: 32px; min-height: 32px; }
+  .shuffle-btn { padding: 10px; }
+  .track-del { min-width: 32px; min-height: 32px; font-size: 13px; }
+  .np-ctrl-btn { width: 36px; height: 36px; }
+  .np-ctrl-btn.play-pause { width: 40px; height: 40px; }
+  .leaflet-control-zoom a {
+    min-width: 44px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  /* There is no hover on a touch screen, so don't hide the volume sliders behind it */
+  .track-vol-wrap { opacity: 1; pointer-events: auto; }
+  .track-vol-slider { width: 72px; }
+  .track-vol-slider::-webkit-slider-thumb { width: 18px; height: 18px; }
+}
+
+/* ── PHONES IN LANDSCAPE ───────────────────────────────────────────────────────
+   Too short to stack the map above the sidebar, so keep them side by side with a
+   slimmer header and sidebar. Overrides the stacked layout for phones ≤768px wide. */
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
+  html, body { height: 100%; min-height: 0; overflow: hidden; }
+  header { height: 44px; padding: 0 12px 0 16px; gap: 8px; }
+  .header-tip { display: none; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    min-height: 0;
+  }
+  .app.sidebar-collapsed { grid-template-columns: 0 1fr; }
+  .map-wrap { order: 0; min-height: 0; }
+  .sidebar {
+    order: 0;
+    max-height: none;
+    border-top: none;
+    border-right: 1px solid var(--border);
+  }
+  .app.sidebar-collapsed .sidebar { display: flex; }
+  .sidebar-scroll { min-width: 249px; }
+
+  .map-toolbar { padding: 6px 10px; gap: 6px; }
+  .tool-btn { padding: 8px 10px; }
+  .vsep { display: none; }
+  .active-zone-chip { margin-left: 0; }
 }
