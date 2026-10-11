@@ -427,9 +427,16 @@ function updateChip() {
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
+function nextDefaultZoneName() {
+  const taken = new Set(zones.map(z => z.name));
+  let n = 1;
+  while (taken.has(`Zone ${n}`)) n++;
+  return `Zone ${n}`;
+}
+
 function addZoneFromInput() {
   const inp = document.getElementById('newZoneName');
-  const name = sanitizeName(inp.value.trim()) || `Zone ${nextId}`;
+  const name = sanitizeName(inp.value.trim()) || nextDefaultZoneName();
   const color = COLORS[zones.length % COLORS.length];
   const z = { id: nextId++, name, color, playlist: [], shuffle: false, layer: null, groupId: null };
   zones.push(z);
