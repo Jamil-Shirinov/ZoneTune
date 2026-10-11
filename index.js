@@ -555,6 +555,9 @@ function renameZone(id, val) {
   z.name = val || 'Unnamed';
   saveZones();
   updateChip();
+  // Update the Music section label in place; a full render() would steal focus from the input
+  const musicLabel = document.querySelector(`.music-zone-name[data-zone="${id}"]`);
+  if (musicLabel) musicLabel.textContent = z.name;
   if (z.layer) attachLayerEvents(z.layer, z);
 }
 
@@ -837,7 +840,7 @@ function render() {
     div.innerHTML = `
   <div class="music-header">
     <div class="music-pip" style="background:${z.color}"></div>
-    <span class="music-zone-name">${esc(z.name)}</span>
+    <span class="music-zone-name" data-zone="${z.id}">${esc(z.name)}</span>
     <button class="shuffle-btn ${z.shuffle ? 'on' : ''}" data-zone="${z.id}" title="Shuffle">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
