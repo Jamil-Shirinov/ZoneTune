@@ -10,7 +10,8 @@ const firebaseConfig = {
 
 
 const SP_CLIENT_ID = 'f9b4775ad02344929b92935d577c9e17';
-const SP_REDIRECT_URI = window.location.origin + '/';
+// Keep the path so the redirect works when hosted in a subfolder (e.g. GitHub Pages /ZoneTune/)
+const SP_REDIRECT_URI = window.location.origin + window.location.pathname.replace(/index\.html$/, '');
 const SP_SCOPES = [
   'streaming',
   'user-read-email',
@@ -501,9 +502,16 @@ function updateChip() {
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
+function nextDefaultZoneName() {
+  const taken = new Set(zones.map(z => z.name));
+  let n = 1;
+  while (taken.has(`Zone ${n}`)) n++;
+  return `Zone ${n}`;
+}
+
 function addZoneFromInput() {
   const inp = document.getElementById('newZoneName');
-  const name = sanitizeName(inp.value.trim()) || `Zone ${nextId}`;
+  const name = sanitizeName(inp.value.trim()) || nextDefaultZoneName();
   const color = COLORS[zones.length % COLORS.length];
   const z = { id: nextId++, name, color, playlist: [], shuffle: false, layer: null, groupId: null };
   zones.push(z);
