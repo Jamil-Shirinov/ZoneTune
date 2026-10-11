@@ -7,8 +7,8 @@ const firebaseConfig = {
   messagingSenderId: "956136154749",
   appId: "1:956136154749:web:3fa11f3a19e3973b203314"
 };
-
-
+ 
+ 
 const SP_CLIENT_ID = 'f9b4775ad02344929b92935d577c9e17';
 const SP_REDIRECT_URI = window.location.origin + '/';
 const SP_SCOPES = [
@@ -18,11 +18,13 @@ const SP_SCOPES = [
   'user-read-playback-state',
   'user-modify-playback-state',
 ].join(' ');
-
+ 
 let spotifyToken = null;
 let spotifyPlayer = null;
 let spotifyDeviceId = null;
 let playerReady = false;
+let spotifyPlayerError = null;  // why the Web Playback SDK isn't usable (shown to the user)
+let pendingSpotifyTrack = null; // track requested before the player was ready
 let currentlyPlaying = false;
 let progressTimer = null;
 let trackDuration = 0;
@@ -30,34 +32,34 @@ let trackPosition = 0;
 let scWidget = null;
 let scReady = false;
 let pendingScVolume = 1;
-
-
+ 
+ 
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 const provider = new firebase.auth.GoogleAuthProvider();
-
+ 
 // The function called by your HTML button
 function googleLogin() {
   auth.signInWithPopup(provider).catch(console.error);
 }
-
+ 
 function googleLogout() {
   auth.signOut();
 }
-
+ 
 // ── PALETTE ──────────────────────────────────────────────────────────────────
 const COLORS = ['#c8ff47','#47cfff','#ff5f5f','#ffd166','#c77dff','#ff9f1c','#06d6a0','#ef476f'];
 const SC_CLIENT_ID = 'L8SGpVAf1pxzBWSkGWrt01k6lOcsa1EZ';
-
+ 
 // ── PERSISTENCE ───────────────────────────────────────────────────────────────
 async function saveZones() {
   const user = auth.currentUser;
   if (!user) return; // Don't save if no one is logged in
-
+ 
   console.log(zones);
-
+ 
   const cloudData = zones.map(z => ({
     id: z.id,
     name: z.name,
@@ -76,7 +78,7 @@ async function saveZones() {
       volume: t.volume ?? 100,
     })),
   }));
-
+ 
   try {
     await db.collection("users").doc(user.uid).set({
       savedZones: cloudData,
@@ -88,43 +90,60 @@ async function saveZones() {
     console.error("Error saving to cloud:", error);
   }
 }
-
-
+ 
+ 
 // ── QUEUE MANAGER ─────────────────────────────────────────────────────────────
 let queue = [];
 let queueIndex = -1;
-
+ 
 function buildQueue(z) {
   queue = z.shuffle ? shuffleArray(z.playlist) : [...z.playlist];
   queueIndex = -1;
 }
-
+ 
 async function advanceQueue() {
   queueIndex++;
   if (queueIndex >= queue.length) queueIndex = 0;
   await playQueueItem(queue[queueIndex]);
 }
-
+ 
 async function playQueueItem(track) {
   if (!track) return;
   const vol = (track.volume ?? 100) / 100;
   syncVolumeSlider(track.volume ?? 100);
   if (track.type === 'spotify') {
     if (scWidget && scReady) scWidget.pause();
-    if (spotifyPlayer) await spotifyPlayer.setVolume(vol);
+    // The Spotify device only exists once the Web Playback SDK fires 'ready'.
+    // Previously the request was silently dropped here and never retried, so a
+    // zone entered while the player wasn't ready stayed silent forever.
+    if (!playerReady || !spotifyDeviceId) {
+      pendingSpotifyTrack = track;
+      if (!spotifyToken) {
+        showToast('Connect Spotify to play music');
+        document.getElementById('spOverlay').classList.remove('hidden');
+      } else if (spotifyPlayerError) {
+        showToast('Spotify player unavailable: ' + spotifyPlayerError, 6000);
+      } else {
+        showToast('Spotify player is still connecting — music will start when it is ready', 4000);
+      }
+      return;
+    }
+    pendingSpotifyTrack = null;
+    await spotifyPlayer.setVolume(vol);
     await playTrackList([track.uri]);
   } else if (track.type === 'soundcloud') {
+    pendingSpotifyTrack = null;
     if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
     pendingScVolume = track.volume ?? 100;
     playSoundcloudTrack(track);
   }
 }
-
+ 
 function syncVolumeSlider(val) {
   const npVol = document.getElementById('npVol');
   if (npVol) npVol.value = val;
 }
-
+ 
 function playSoundcloudTrack(track) {
   console.log('playSoundcloudTrack called', track);
   console.log('scWidget:', scWidget, 'scReady:', scReady);
@@ -136,7 +155,7 @@ function playSoundcloudTrack(track) {
     show_comments: false, show_user: false,
   });
 }
-
+ 
 async function loadZonesFromCloud(uid) {
   try {
     const doc = await db.collection("users").doc(uid).get();
@@ -188,7 +207,7 @@ async function loadZonesFromCloud(uid) {
             volume: t.volume ?? 100,
           };
         }).filter(Boolean);
-
+ 
         return {
           ...cloudZone,
           layer: restoredLayer,
@@ -197,7 +216,7 @@ async function loadZonesFromCloud(uid) {
           groupId: cloudZone.groupId ?? null
         };
       });
-
+ 
       console.log(zones)
       
       selectedZoneId = zones.length > 0 ? zones[0].id : null;
@@ -206,7 +225,7 @@ async function loadZonesFromCloud(uid) {
     console.error("Error loading from cloud:", error);
   }
 }
-
+ 
 // ── STATE ────────────────────────────────────────────────────────────────────
 let zones = [
   { id: 1, name: 'Zone A', color: COLORS[0], playlist: [], shuffle: false, layer: null, groupId: null },
@@ -220,40 +239,40 @@ let mode = 'draw';
 let drawHandler = null;
 let gpsWatchId = null;
 let isGpsActive = false;
-
+ 
 // ── MAP INIT ─────────────────────────────────────────────────────────────────
 const map = L.map('map', {
   center: [37.871994, -122.257884], // Berkeley, CA (lat, lng)
   zoom: 13,
   zoomControl: true,
 });
-
+ 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19,
 }).addTo(map);
-
+ 
 // Dismiss loader once tiles load
 map.once('load', fadeOutLoader);
 setTimeout(fadeOutLoader, 2500);
-
+ 
 function fadeOutLoader() {
   const el = document.getElementById('mapLoading');
   if (!el) return;
   el.classList.add('gone');
   setTimeout(() => el.remove(), 600);
 }
-
+ 
 // Feature group holds all drawn layers
 const drawnItems = new L.FeatureGroup().addTo(map);
-
+ 
 // ── DRAW MANAGEMENT ───────────────────────────────────────────────────────────
 function startDraw() {
   if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
   if (!selectedZoneId) { showToast('Select a zone first'); return; }
   const z = getZone(selectedZoneId);
   if (!z) return;
-
+ 
   drawHandler = new L.Draw.Polygon(map, {
     shapeOptions: {
       color: z.color,
@@ -269,25 +288,25 @@ function startDraw() {
   });
   drawHandler.enable();
 }
-
+ 
 map.on(L.Draw.Event.CREATED, function(e) {
   if (!selectedZoneId) return;
   const z = getZone(selectedZoneId);
   if (!z) return;
-
+ 
   // Remove previous layer for this zone
   if (z.layer) drawnItems.removeLayer(z.layer);
-
+ 
   const layer = e.layer;
   applyStyle(layer, z, true);
   drawnItems.addLayer(layer);
   z.layer = layer;
   attachLayerEvents(layer, z);
-
+ 
   saveZones();
-
+ 
   render();
-
+ 
   // Auto-advance to next unmapped zone
   const next = zones.find(z2 => !z2.layer && z2.id !== selectedZoneId);
   if (next) {
@@ -298,9 +317,9 @@ map.on(L.Draw.Event.CREATED, function(e) {
     drawHandler = null;
   }
 });
-
+ 
 map.on(L.Draw.Event.DRAWSTOP, () => { drawHandler = null; });
-
+ 
 function applyStyle(layer, z, isSelected) {
   layer.setStyle({
     color:       z.color,
@@ -311,7 +330,7 @@ function applyStyle(layer, z, isSelected) {
     dashArray:   isSelected ? null : '6 4',
   });
 }
-
+ 
 function attachLayerEvents(layer, z) {
   layer.off('click');
   layer.on('click', function() {
@@ -327,7 +346,7 @@ function attachLayerEvents(layer, z) {
     applyStyle(layer, z, z.id === selectedZoneId);
   });
 }
-
+ 
 function openZonePopup(layer, z) {
   const musicHtml = z.spotifyUrl
     ? `<div class="popup-music">
@@ -335,10 +354,10 @@ function openZonePopup(layer, z) {
          Spotify linked
        </div>`
     : `<div class="popup-no-music">No music assigned</div>`;
-
+ 
   const openBtn = z.spotifyUrl
     ? `<a class="popup-btn" href="${esc(z.spotifyUrl)}" target="_blank">Open ↗</a>` : '';
-
+ 
   layer.bindPopup(`
     <div>
       <div class="popup-name" style="color:${z.color}">${esc(z.name)}</div>
@@ -350,7 +369,7 @@ function openZonePopup(layer, z) {
     </div>
   `, { maxWidth: 220, closeButton: true }).openPopup();
 }
-
+ 
 // ── MODE ─────────────────────────────────────────────────────────────────────
 function setMode(m) {
   mode = m;
@@ -362,7 +381,7 @@ function setMode(m) {
     if (drawHandler) { try { drawHandler.disable(); } catch(e){} drawHandler = null; }
   }
 }
-
+ 
 // ── SELECTION ────────────────────────────────────────────────────────────────
 function setSelected(id) {
   selectedZoneId = id;
@@ -373,7 +392,7 @@ function setSelected(id) {
   updateChip();
   if (mode === 'draw') startDraw();
 }
-
+ 
 function updateChip() {
   const chip = document.getElementById('chipWrap');
   const z = getZone(selectedZoneId);
@@ -385,7 +404,7 @@ function updateChip() {
     chip.classList.add('hidden');
   }
 }
-
+ 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
 function addZoneFromInput() {
   const inp = document.getElementById('newZoneName');
@@ -394,13 +413,13 @@ function addZoneFromInput() {
   const z = { id: nextId++, name, color, playlist: [], shuffle: false, layer: null, groupId: null };
   zones.push(z);
   inp.value = '';
-
+ 
   setSelected(z.id);
-
+ 
   saveZones();
   render();
 }
-
+ 
 function addGroup() {
   const inp = document.getElementById('newGroupName');
   const raw = inp.value.trim();
@@ -415,15 +434,15 @@ function addGroup() {
   saveZones();
   render();
 }
-
-
+ 
+ 
 function deleteGroup(id) {
   zones.forEach(z => { if (z.groupId === id) z.groupId = null; });
   groups = groups.filter(g => g.id !== id);
   saveZones();
   render();
 }
-
+ 
 function moveZoneToGroup(zoneId, groupId) {
   const z = getZone(zoneId);
   if (!z) return;
@@ -431,7 +450,7 @@ function moveZoneToGroup(zoneId, groupId) {
   saveZones();
   render();
 }
-
+ 
 function deleteZone(id) {
   map.closePopup();
   const z = getZone(id);
@@ -442,7 +461,7 @@ function deleteZone(id) {
   render();
   updateChip();
 }
-
+ 
 function detectTrackType(url) {
   if (/^spotify:|open\.spotify\.com/.test(url)) return 'spotify';
   if (/soundcloud\.com\/[^/]+\/[^/]+/.test(url)) return 'soundcloud';
@@ -471,11 +490,11 @@ async function fetchSoundcloudLabel(permalink) {
     return { label: permalink, artworkUrl: null, trackId: null };
   }
 }
-
+ 
 function sanitizeName(val) {
   return val.replace(/<[^>]*>/g, '').slice(0, 40);
 }
-
+ 
 function renameZone(id, val) {
   const z = getZone(id);
   if (!z) return;
@@ -484,7 +503,7 @@ function renameZone(id, val) {
   updateChip();
   if (z.layer) attachLayerEvents(z.layer, z);
 }
-
+ 
 function sanitizeSpotifyUrl(url) {
   const trimmed = url.trim();
   // Only allow spotify: URIs or https://open.spotify.com URLs
@@ -492,21 +511,21 @@ function sanitizeSpotifyUrl(url) {
   if (/^https:\/\/open\.spotify\.com\/[a-z]+\/[a-zA-Z0-9]+/.test(trimmed)) return trimmed;
   return '';
 }
-
+ 
 async function addTrack(zoneId, url) {
   const z = getZone(zoneId);
   if (!z || !url.trim()) return;
   if (z.playlist.length >= 100) { showToast('Max 100 tracks per zone'); return; }
-
+ 
   const type = detectTrackType(url.trim());
   if (!type) { showToast('Paste a Spotify or SoundCloud track URL'); return; }
-
+ 
   if (type === 'spotify') {
     const uri = extractSpotifyUri(url.trim());
     if (!uri || !uri.includes(':track:')) { showToast('Please paste a Spotify track URL'); return; }
     const label = await fetchTrackLabel(url.trim(), uri);
     z.playlist.push({ url: url.trim(), uri, label, type: 'spotify', volume: 100 });
-
+ 
   } else if (type === 'soundcloud') {
     const permalink = extractSoundcloudPermalink(url.trim());
     if (!permalink) { showToast('Invalid SoundCloud URL'); return; }
@@ -514,11 +533,11 @@ async function addTrack(zoneId, url) {
     const { label, artworkUrl, trackId } = await fetchSoundcloudLabel(permalink);
     z.playlist.push({ url: permalink, permalink, label, artworkUrl, trackId, type: 'soundcloud', volume: 100 });
   }
-
+ 
   saveZones();
   render();
 }
-
+ 
 function removeTrack(zoneId, index) {
   const z = getZone(zoneId);
   if (!z) return;
@@ -526,21 +545,27 @@ function removeTrack(zoneId, index) {
   saveZones();
   render();
 }
-
+ 
 async function fetchTrackLabel(url, uri) {
   if (!spotifyToken) return uri; // fallback to raw URI
   try {
+    await ensureToken();
     const trackId = uri.split(':').pop();
     const res = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
       headers: { 'Authorization': 'Bearer ' + spotifyToken }
     });
+    if (!res.ok) {
+      // Same account/app problem will also block playback, so say so now
+      showToast('Spotify API error: ' + await spotifyErrorText(res), 6000);
+      return uri;
+    }
     const data = await res.json();
     return `${data.name} — ${data.artists?.map(a => a.name).join(', ')}`;
   } catch (e) {
     return uri;
   }
 }
-
+ 
 function clearAllZones() {
   if (!confirm('Remove all zone shapes from the map?')) return;
   zones.forEach(z => { if (z.layer) { drawnItems.removeLayer(z.layer); z.layer = null; } });
@@ -548,12 +573,12 @@ function clearAllZones() {
   render();
   if (mode === 'draw') startDraw();
 }
-
+ 
 // Touch drag state (for mobile - press & hold 1s to enter drag mode)
 let touchDragState = null;
 let touchDragJustEnded = false;
 const HOLD_DURATION_MS = 1000;
-
+ 
 function appendZoneRow(parent, z) {
   const div = document.createElement('div');
   div.className = 'zone-row' + (z.id === selectedZoneId ? ' selected' : '');
@@ -567,7 +592,7 @@ function appendZoneRow(parent, z) {
   const pip = div.querySelector('.zone-drag-handle');
   div.querySelector('.zone-name-inp').addEventListener('input', e => renameZone(z.id, e.target.value));
   div.querySelector('.del-btn').addEventListener('click', e => { e.stopPropagation(); deleteZone(z.id); });
-
+ 
   function handleSelect(e) {
     if (e.target.closest('.del-btn')) return;
     if (e.target.closest('.zone-name-inp')) return;
@@ -576,7 +601,7 @@ function appendZoneRow(parent, z) {
   }
   div.addEventListener('click', handleSelect);
   div.addEventListener('touchend', handleSelect, { passive: true });
-
+ 
   // Mouse drag (desktop) - pip only
   pip.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/plain', z.id);
@@ -584,7 +609,7 @@ function appendZoneRow(parent, z) {
     div.classList.add('zone-dragging');
   });
   pip.addEventListener('dragend', () => div.classList.remove('zone-dragging'));
-
+ 
   // Touch drag (mobile): hold 1s anywhere on row (except input/delete) to enter drag mode
   function touchStart(e) {
     if (e.touches.length !== 1) return;
@@ -668,10 +693,10 @@ function appendZoneRow(parent, z) {
   div.addEventListener('touchmove', touchMove, { passive: false });
   div.addEventListener('touchend', touchEnd, { passive: false });
   div.addEventListener('touchcancel', touchCancel, { passive: true });
-
+ 
   parent.appendChild(div);
 }
-
+ 
 function setupDropTarget(headerEl, groupId) {
   headerEl.dataset.groupId = String(groupId);
   headerEl.addEventListener('dragover', e => {
@@ -687,12 +712,12 @@ function setupDropTarget(headerEl, groupId) {
     if (zoneId) moveZoneToGroup(zoneId, groupId);
   });
 }
-
+ 
 // ── RENDER SIDEBAR ────────────────────────────────────────────────────────────
 function render() {
   const gl = document.getElementById('groupsList');
   gl.innerHTML = '';
-
+ 
   // Ungrouped section
   const ugSection = document.createElement('div');
   ugSection.className = 'group-section';
@@ -704,7 +729,7 @@ function render() {
   ugZones.forEach(z => appendZoneRow(ugSection.querySelector('.group-zones'), z));
   setupDropTarget(ugSection.querySelector('.group-header'), null);
   gl.appendChild(ugSection);
-
+ 
   // Group sections
   groups.forEach(g => {
     const section = document.createElement('div');
@@ -722,16 +747,16 @@ function render() {
     setupDropTarget(section.querySelector('.group-header'), g.id);
     gl.appendChild(section);
   });
-
+ 
   // Music list
-
+ 
   // Music list
   const ml = document.getElementById('musicList');
   ml.innerHTML = '';
   zones.forEach(z => {
     const div = document.createElement('div');
     div.className = 'music-item';
-
+ 
     const tracksHtml = (z.playlist || []).map((t, i) => `
     <div class="track-row">
     ${t.type === 'soundcloud'
@@ -754,7 +779,7 @@ function render() {
       <button class="track-del" data-zone="${z.id}" data-idx="${i}">✕</button>
     </div>
   `).join('');
-
+ 
     div.innerHTML = `
   <div class="music-header">
     <div class="music-pip" style="background:${z.color}"></div>
@@ -773,7 +798,7 @@ function render() {
       <button class="add-track-btn" data-zone="${z.id}">Add</button>
     </div>
   `;
-
+ 
     // Add track on button click
     div.querySelector('.add-track-btn').addEventListener('click', e => {
       const inp = div.querySelector('.add-track-inp');
@@ -791,12 +816,12 @@ function render() {
     div.querySelectorAll('.track-del').forEach(btn => {
       btn.addEventListener('click', () => removeTrack(+btn.dataset.zone, +btn.dataset.idx));
     });
-
+ 
     div.querySelector('.shuffle-btn').addEventListener('click', e => {
       e.stopPropagation();
       toggleShuffle(z.id);
     });
-
+ 
     div.querySelectorAll('.track-vol-slider').forEach(slider => {
       slider.addEventListener('input', e => {
         e.stopPropagation();
@@ -817,11 +842,11 @@ function render() {
       });
         slider.addEventListener('change', () => saveZones());
       });
-
+ 
     ml.appendChild(div);
   });
 }
-
+ 
 // ── SIDEBAR TOGGLE ────────────────────────────────────────────────────────────
 function toggleSidebar(collapse) {
   const app = document.querySelector('.app');
@@ -835,29 +860,29 @@ function toggleSidebar(collapse) {
   // Leaflet needs to re-measure once the map area has resized
   setTimeout(() => map.invalidateSize(), 220);
 }
-
+ 
 try {
   if (localStorage.getItem('sidebarCollapsed') === '1') toggleSidebar(true);
 } catch (e) {}
-
+ 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function getZone(id) { return zones.find(z => z.id === id); }
-
+ 
 function esc(s) {
   return String(s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
+ 
 let toastTimer;
-function showToast(msg) {
+function showToast(msg, ms = 2400) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+  toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
-
+ 
 document.getElementById('newZoneName').addEventListener('keydown', e => {
   if (e.key === 'Enter') addZoneFromInput();
 });
@@ -865,10 +890,10 @@ const newGroupEl = document.getElementById('newGroupName');
 if (newGroupEl) newGroupEl.addEventListener('keydown', e => {
   if (e.key === 'Enter') addGroup();
 });
-
+ 
 // ── SPOTIFY AUTH (PKCE) ───────────────────────────────────────────────────────
-
-
+ 
+ 
 // PKCE helpers
 function base64url(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
@@ -879,7 +904,7 @@ async function generatePKCE() {
   const challenge = base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
   return { verifier, challenge };
 }
-
+ 
 async function startSpotifyAuth() {
   const { verifier, challenge } = await generatePKCE();
   sessionStorage.setItem('sp_verifier', verifier);
@@ -893,7 +918,7 @@ async function startSpotifyAuth() {
   });
   window.location = 'https://accounts.spotify.com/authorize?' + params;
 }
-
+ 
 async function exchangeCode(code) {
   const verifier = sessionStorage.getItem('sp_verifier');
   const res = await fetch('https://accounts.spotify.com/api/token', {
@@ -923,7 +948,7 @@ async function exchangeCode(code) {
   console.error('Token exchange failed', data);
   return false;
 }
-
+ 
 async function refreshToken() {
   const refresh = sessionStorage.getItem('sp_refresh');
   if (!refresh) return false;
@@ -946,20 +971,22 @@ async function refreshToken() {
   }
   return false;
 }
-
+ 
 async function ensureToken() {
   const expiry = parseInt(sessionStorage.getItem('sp_expiry') || '0');
   if (Date.now() > expiry) return await refreshToken();
   return true;
 }
-
+ 
 // ── SPOTIFY WEB PLAYBACK SDK ──────────────────────────────────────────────────
 window.onSpotifyWebPlaybackSDKReady = () => {
   if (!spotifyToken) return; // will init after auth
   initPlayer();
 };
-
+ 
 function initPlayer() {
+  if (spotifyPlayer) return; // never register a second Spotify device
+  let authRetried = false;
   spotifyPlayer = new Spotify.Player({
     name: 'ZoneTune',
     getOAuthToken: async cb => {
@@ -968,39 +995,83 @@ function initPlayer() {
     },
     volume: 0.8,
   });
-
+ 
   spotifyPlayer.addListener('ready', ({ device_id }) => {
     spotifyDeviceId = device_id;
     playerReady = true;
+    spotifyPlayerError = null;
     console.log('Spotify player ready, device:', device_id);
     showToast('Spotify player ready ✓');
+    // The person may already be inside a zone (entered while we were connecting)
+    if (pendingSpotifyTrack && currentZoneId != null) {
+      const track = pendingSpotifyTrack;
+      pendingSpotifyTrack = null;
+      playQueueItem(track).catch(e => console.error('Deferred playback failed', e));
+    }
   });
-
+ 
   spotifyPlayer.addListener('not_ready', ({ device_id }) => {
     playerReady = false;
     console.warn('Player went offline');
   });
-
+ 
   spotifyPlayer.addListener('player_state_changed', state => {
     if (!state) return;
     // Only update UI,  on't advance queue — advanceQueue is called explicitly
     updatePlayerUI(state);
   });
-
+ 
   spotifyPlayer.addListener('initialization_error', ({ message }) => {
-    showToast('Player init error: ' + message);
+    spotifyPlayerError = message;
+    showToast('Player init error: ' + message, 6000);
   });
   spotifyPlayer.addListener('authentication_error', async ({ message }) => {
-    const ok = await refreshToken();
-    if (!ok) showToast('Spotify auth error — please reload');
+    console.error('Spotify authentication_error:', message);
+    playerReady = false;
+    spotifyPlayerError = 'Spotify rejected the login (' + message + ')';
+    // Retry once with a fresh token (before, a successful refresh left the player dead)
+    if (!authRetried && await refreshToken().catch(() => false)) {
+      authRetried = true;
+      connectPlayer();
+      return;
+    }
+    showToast(spotifyPlayerError + ' — please log in again', 6000);
+    document.getElementById('spOverlay').classList.remove('hidden');
   });
   spotifyPlayer.addListener('account_error', ({ message }) => {
-    showToast('Spotify Premium required for playback');
+    spotifyPlayerError = 'Spotify Premium required for playback';
+    showToast(spotifyPlayerError, 6000);
   });
-
-  spotifyPlayer.connect();
+  spotifyPlayer.addListener('playback_error', ({ message }) => {
+    console.error('Spotify playback_error:', message);
+    showToast('Spotify playback error: ' + message, 6000);
+  });
+  spotifyPlayer.addListener('autoplay_failed', () => {
+    // The browser's autoplay policy stopped the SDK from starting audio by itself
+    showToast('Your browser blocked autoplay — press ▶ to start the music', 6000);
+    document.getElementById('nowPlaying').classList.add('show');
+  });
+ 
+  function connectPlayer() {
+    spotifyPlayer.connect().then(connected => {
+      if (connected) return;
+      // The SDK can fail to connect without emitting any error event
+      spotifyPlayerError = spotifyPlayerError || 'could not connect. Needs a Premium account, and in Development Mode the account must be listed under User Management in the Spotify dashboard';
+      console.error('Spotify player.connect() failed:', spotifyPlayerError);
+      showToast('Spotify player unavailable: ' + spotifyPlayerError, 8000);
+    }).catch(e => console.error('Spotify player.connect() threw', e));
+  }
+  connectPlayer();
 }
-
+ 
+// Browsers with strict autoplay rules only let the SDK play audio if its media
+// element was unlocked during a user gesture (click/tap). Call from click handlers.
+function activateSpotifyElement() {
+  if (spotifyPlayer && typeof spotifyPlayer.activateElement === 'function') {
+    spotifyPlayer.activateElement().catch(() => {});
+  }
+}
+ 
 // ── SPOTIFY PLAYBACK API ──────────────────────────────────────────────────────
 function extractSpotifyUri(url) {
   // Handle spotify: URIs directly
@@ -1010,22 +1081,22 @@ function extractSpotifyUri(url) {
   if (m) return `spotify:${m[1]}:${m[2]}`;
   return null;
 }
-
+ 
 async function playSpotifyUri(uri) {
   if (!playerReady || !spotifyDeviceId) {
     showToast('Player not ready yet…');
     return;
   }
   await ensureToken();
-
+ 
   const isTrack    = uri.startsWith('spotify:track:');
   const isPlaylist = uri.includes(':playlist:');
   const isAlbum    = uri.includes(':album:');
-
+ 
   const body = isTrack
     ? { uris: [uri] }
     : { context_uri: uri };
-
+ 
   const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spotifyDeviceId}`, {
     method: 'PUT',
     headers: {
@@ -1034,7 +1105,7 @@ async function playSpotifyUri(uri) {
     },
     body: JSON.stringify(body),
   });
-
+ 
   if (res.status === 204 || res.status === 200) {
     currentlyPlaying = true;
     document.getElementById('nowPlaying').classList.add('show');
@@ -1043,8 +1114,8 @@ async function playSpotifyUri(uri) {
     showToast('Playback error: ' + (err.error?.message || res.status));
   }
 }
-
-async function playTrackList(uris) {
+ 
+async function playTrackList(uris, retried = false) {
   if (!playerReady || !spotifyDeviceId || !uris.length) return;
   await ensureToken();
   const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spotifyDeviceId}`, {
@@ -1055,33 +1126,63 @@ async function playTrackList(uris) {
     },
     body: JSON.stringify({ uris }),  // plays all tracks in order
   });
-  if (res.status === 204 || res.status === 200) {
+  if (res.ok) {
     currentlyPlaying = true;
     document.getElementById('nowPlaying').classList.add('show');
+  } else if (res.status === 404 && !retried) {
+    // "Device not found": a just-connected SDK device isn't always visible to the
+    // Web API yet. Make it the active device, then try once more.
+    await transferPlaybackHere();
+    await playTrackList(uris, true);
   } else {
-    const err = await res.json().catch(() => ({}));
-    showToast('Playback error: ' + (err.error?.message || res.status));
+    showToast('Playback error: ' + await spotifyErrorText(res), 6000);
   }
 }
-
+ 
+async function transferPlaybackHere() {
+  await fetch('https://api.spotify.com/v1/me/player', {
+    method: 'PUT',
+    headers: {
+      'Authorization': 'Bearer ' + spotifyToken,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ device_ids: [spotifyDeviceId], play: false }),
+  }).catch(() => {});
+  await new Promise(r => setTimeout(r, 1000));
+}
+ 
+// Spotify errors are usually JSON ({ error: { message } }), but the Development
+// Mode "user not registered" 403 is plain text, so read both.
+async function spotifyErrorText(res) {
+  const text = await res.text().catch(() => '');
+  let msg = text;
+  try { msg = JSON.parse(text).error?.message || text; } catch (e) {}
+  if (/not be registered|not registered/i.test(msg)) {
+    msg = 'this Spotify account is not added to the app (Spotify dashboard → User Management)';
+  }
+  return `${msg || 'request failed'} (${res.status})`;
+}
+ 
 async function spotifyTogglePlay() {
   const track = queue[queueIndex];
   if (track?.type === 'soundcloud') {
     if (scWidget && scReady) scWidget.toggle();
   } else {
-    if (spotifyPlayer) await spotifyPlayer.togglePlay();
+    if (!spotifyPlayer) return;
+    if (!currentlyPlaying) activateSpotifyElement(); // this click counts as a user gesture
+    await spotifyPlayer.togglePlay();
   }
 }
-
+ 
 async function spotifyNext() {
   await advanceQueue();
 }
-
+ 
 async function spotifyPrev() {
   queueIndex = queueIndex <= 0 ? queue.length - 2 : queueIndex - 2;
   await advanceQueue();
 }
-
+ 
 async function setVolume(val) {
   const track = queue[queueIndex];
   if (track) {
@@ -1098,7 +1199,7 @@ async function setVolume(val) {
     if (spotifyPlayer) await spotifyPlayer.setVolume(val / 100);
   }
 }
-
+ 
 async function seekTo(e) {
   if (!spotifyPlayer || !trackDuration) return;
   const bar = document.getElementById('npBar');
@@ -1106,8 +1207,8 @@ async function seekTo(e) {
   const pct = (e.clientX - rect.left) / rect.width;
   await spotifyPlayer.seek(Math.floor(pct * trackDuration));
 }
-
-
+ 
+ 
 function toggleShuffle(zoneId) {
   const z = getZone(zoneId);
   if (!z) return;
@@ -1116,7 +1217,7 @@ function toggleShuffle(zoneId) {
   render();
   showToast(z.shuffle ? `Shuffle on for ${z.name}` : `Shuffle off for ${z.name}`);
 }
-
+ 
 function shuffleArray(arr) {  //helper function
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -1125,38 +1226,38 @@ function shuffleArray(arr) {  //helper function
   }
   return a;
 }
-
+ 
 function updatePlayerUI(state) {
   if (!state) return;
   const track = state.track_window?.current_track;
   if (!track) return;
-
+ 
   currentlyPlaying = !state.paused;
   trackDuration = state.duration;
   trackPosition = state.position;
-
+ 
   // Art
   const artEl = document.getElementById('npArt');
   const imgUrl = track.album?.images?.[0]?.url;
   artEl.innerHTML = imgUrl
     ? `<img src="${imgUrl}" alt="album art">`
     : `<svg class="np-art-placeholder" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9.5 8.5l7 3.5-7 3.5V8.5z" fill="currentColor"/></svg>`;
-
+ 
   document.getElementById('npTrack').textContent  = track.name || '—';
   document.getElementById('npArtist').textContent = (track.artists || []).map(a => a.name).join(', ');
-
+ 
   // Play/pause icon
   const icon = document.getElementById('npPlayIcon');
   icon.innerHTML = state.paused
     ? '<path d="M8 5v14l11-7z"/>'
     : '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
-
+ 
   // Progress
   updateProgress(state.position, state.duration);
-
+ 
   // Show player bar
   document.getElementById('nowPlaying').classList.add('show');
-
+ 
   // Kick off local progress timer
   clearInterval(progressTimer);
   if (!state.paused) {
@@ -1169,28 +1270,28 @@ function updatePlayerUI(state) {
       if (pos >= trackDuration) clearInterval(progressTimer);
     }, 500);
   }
-
+ 
   if (state.paused && state.position === 0 && 
     state.track_window?.previous_tracks?.length > 0 &&
     !state.track_window?.current_track) {
   advanceQueue();
 }
 }
-
+ 
 function updatePlayerUIForSoundcloud() {
   const track = queue[queueIndex];
   if (!track) return;
-
+ 
   document.getElementById('npTrack').textContent = track.label || 'SoundCloud track';
   document.getElementById('npArtist').textContent = 'SoundCloud';
-
+ 
   const artEl = document.getElementById('npArt');
   artEl.innerHTML = track.artworkUrl
     ? `<img src="${track.artworkUrl}" alt="artwork">`
     : `<svg class="np-art-placeholder" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M9.5 8.5l7 3.5-7 3.5V8.5z" fill="currentColor"/></svg>`;
-
+ 
   document.getElementById('nowPlaying').classList.add('show');
-
+ 
   clearInterval(progressTimer);
   progressTimer = setInterval(() => {
     if (!scWidget || !scReady) return;
@@ -1201,7 +1302,7 @@ function updatePlayerUIForSoundcloud() {
     });
   }, 500);
 }
-
+ 
 function updateProgress(pos, dur) {
   if (!dur) return;
   const pct = (pos / dur) * 100;
@@ -1209,24 +1310,24 @@ function updateProgress(pos, dur) {
   document.getElementById('npTimeCur').textContent = msToTime(pos);
   document.getElementById('npTimeDur').textContent = msToTime(dur);
 }
-
+ 
 function msToTime(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
 }
-
+ 
 // ── PERSON MARKER ────────────────────────────────────────────────────────────
 let personMarker  = null;
 let personVisible = false;
 let currentZoneId = null;
-
+ 
 // The new pulsing blue dot for live GPS
 const gpsIcon = L.divIcon({
   className: 'gps-marker',
   iconSize: [16, 16],     
   iconAnchor: [8, 8]   
 });
-
+ 
 const personIcon = L.divIcon({
   className: '',
   html: `
@@ -1249,7 +1350,7 @@ const personIcon = L.divIcon({
   iconSize: [40, 44],
   iconAnchor: [20, 44],
 });
-
+ 
 function togglePerson() {
   // Add this safety check!
   if (isGpsActive) {
@@ -1259,6 +1360,11 @@ function togglePerson() {
   personVisible ? removePerson() : placePerson();
 }
 function placePerson() {
+  // In Draw mode Leaflet.draw's invisible cursor marker sits on top of every
+  // marker and swallows the mouse, so the person could never be dragged into a
+  // zone. Switch to Navigate mode while the person is on the map.
+  if (mode === 'draw') setMode('nav');
+  activateSpotifyElement(); // runs inside the "Add Person" click
   const center = map.getCenter();
   personMarker = L.marker(center, { icon: personIcon, draggable: true, zIndexOffset: 1000 }).addTo(map);
   personMarker.on('dragstart', () => map.dragging.disable());
@@ -1269,7 +1375,7 @@ function placePerson() {
   document.getElementById('btnPersonLabel').textContent = 'Remove Person';
   checkPersonZone();
 }
-
+ 
 function removePerson() {
   if (personMarker) { map.removeLayer(personMarker); personMarker = null; }
   personVisible = false;
@@ -1278,11 +1384,11 @@ function removePerson() {
   document.getElementById('btnPersonLabel').textContent = 'Add Person';
   document.getElementById('nowPlaying').classList.remove('show');
 }
-
+ 
 function toggleGPS() {
   const btn = document.getElementById('btnGps');
   const label = document.getElementById('btnGpsLabel');
-
+ 
   // Turn GPS OFF
   if (isGpsActive) {
     if (gpsWatchId) navigator.geolocation.clearWatch(gpsWatchId);
@@ -1296,27 +1402,28 @@ function toggleGPS() {
     removePerson();
     return;
   }
-
+ 
   // Check browser support
   if (!navigator.geolocation) {
     showToast("Geolocation is not supported by your browser.");
     return;
   }
-
+ 
   // Turn GPS ON
   isGpsActive = true;
   btn.classList.add('on');
   label.textContent = 'Stop GPS';
-
+  activateSpotifyElement(); // runs inside the "Start GPS" click
+ 
   // Override: If the manual person is currently on the map, wipe it!
   if (personVisible) {
     removePerson(); 
   }
-
+ 
   gpsWatchId = navigator.geolocation.watchPosition(
     (position) => {
       const latlng = [position.coords.latitude, position.coords.longitude];
-
+ 
       if (!personMarker) {
         // First ping: create the marker using the new GPS icon!
         personMarker = L.marker(latlng, { 
@@ -1331,7 +1438,7 @@ function toggleGPS() {
         // Subsequent pings: just move the marker
         personMarker.setLatLng(latlng);
       }
-
+ 
       // Check if we walked into a zone and trigger Spotify!
       checkPersonZone();
     },
@@ -1343,7 +1450,7 @@ function toggleGPS() {
     { enableHighAccuracy: true, maximumAge: 0 }
   );
 }
-
+ 
 function checkPersonZone() {
   if (!personMarker) return;
   const latlng = personMarker.getLatLng();
@@ -1356,7 +1463,7 @@ function checkPersonZone() {
     onPersonZoneChange(foundId);
   }
 }
-
+ 
 function pointInLeafletPolygon(latlng, layer) {
   if (!layer.getBounds().contains(latlng)) return false;
   const verts = layer.getLatLngs()[0];
@@ -1369,28 +1476,35 @@ function pointInLeafletPolygon(latlng, layer) {
   }
   return inside;
 }
-
+ 
 async function onPersonZoneChange(zoneId) {
   const pulse = document.getElementById('personPulse');
   if (pulse) pulse.classList.toggle('in-zone', !!zoneId);
-
+  pendingSpotifyTrack = null; // a track waiting for the player belongs to the old zone
+ 
   if (!zoneId) {
     if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
     if (scWidget && scReady) scWidget.pause();
     document.getElementById('npZoneLabel').textContent = 'Outside zones';
     return;
   }
-
+ 
   const z = getZone(zoneId);
   if (!z) return;
-
+ 
   showToast(`Entered: ${z.name}`);
   document.getElementById('npZoneLabel').textContent = z.name;
   document.getElementById('nowPlaying').classList.add('show');
-
+ 
   if (z.playlist && z.playlist.length > 0) {
     buildQueue(z);
-    await advanceQueue();
+    try {
+      await advanceQueue();
+    } catch (e) {
+      // This runs un-awaited from the drag/GPS handlers, so surface failures
+      console.error('Could not start zone music', e);
+      showToast('Could not start music: ' + (e?.message || e), 6000);
+    }
   } else {
     if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
     if (scWidget && scReady) scWidget.pause();
@@ -1398,29 +1512,29 @@ async function onPersonZoneChange(zoneId) {
     document.getElementById('npArtist').textContent = '';
   }
 }
-
+ 
 // ── SPOTIFY INIT ON LOAD ──────────────────────────────────────────────────────
 async function initSpotify() {
   // Check for auth code callback
   const params  = new URLSearchParams(window.location.search);
   const code    = params.get('code');
   const errParam = params.get('error');
-
+ 
   if (errParam) {
     showToast('Spotify auth cancelled');
     history.replaceState({}, '', window.location.pathname);
     return;
   }
-
+ 
   if (code) {
     const ok = await exchangeCode(code);
     if (!ok) { showToast('Token exchange failed'); return; }
   }
-
+ 
   // Check stored token
   const storedToken  = sessionStorage.getItem('sp_token');
   const storedExpiry = parseInt(sessionStorage.getItem('sp_expiry') || '0');
-
+ 
   if (storedToken && Date.now() < storedExpiry) {
     spotifyToken = storedToken;
     document.getElementById('spOverlay').classList.add('hidden');
@@ -1429,7 +1543,7 @@ async function initSpotify() {
     // else onSpotifyWebPlaybackSDKReady will fire and call initPlayer()
     return;
   }
-
+ 
   // Try refresh
   if (sessionStorage.getItem('sp_refresh')) {
     const ok = await refreshToken();
@@ -1439,12 +1553,12 @@ async function initSpotify() {
       return;
     }
   }
-
+ 
   // Show login overlay
   document.getElementById('spOverlay').classList.remove('hidden');
 }
-
-
+ 
+ 
 function initSoundcloud() {
   const iframe = document.getElementById('scPlayer');
   scWidget = SC.Widget(iframe);
