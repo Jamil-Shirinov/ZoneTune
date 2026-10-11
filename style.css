@@ -58,13 +58,6 @@ header {
   border: 1px solid var(--border);
 }
 
-.header-tip {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-dim);
-  letter-spacing: 0.5px;
-}
-
 .signout-btn {
   background: transparent; color: #ff5f5f;
   border: 1px solid #ff5f5f; border-radius: 4px;
@@ -390,6 +383,12 @@ header {
   font-size: 12px; line-height: 1.4; text-align: right;
 }
 .draw-hint.show { display: block; }
+/* Edit Zone's Done / Redraw / Cancel */
+.edit-actions { display: none; gap: 6px; pointer-events: auto; }
+.edit-actions.show { display: flex; }
+.edit-actions .tool-btn { background: var(--surface); color: var(--text); border-color: var(--border-hi); box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+.edit-actions .tool-btn.edit-done { background: var(--accent); color: #0a0a0c; border-color: var(--accent); }
+.edit-actions .tool-btn.gone { display: none; }
 
 .vsep { width: 1px; height: 22px; background: var(--border); }
 
@@ -819,6 +818,196 @@ header {
   }
 }
 
+/* ── SPOTIFY LIBRARY BROWSER ── */
+.browse-sp-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; margin-top: 6px; padding: 6px 10px;
+  background: rgba(29,185,84,0.08); border: 1px solid rgba(29,185,84,0.35);
+  border-radius: 6px; color: var(--spotify);
+  font-family: 'DM Mono', monospace; font-size: 10px; cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.browse-sp-btn:hover { background: rgba(29,185,84,0.16); border-color: var(--spotify); }
+
+.lib-overlay {
+  position: fixed; inset: 0; z-index: 5000;
+  background: rgba(11,11,14,0.82);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.lib-overlay.hidden { display: none; }
+.lib-modal [hidden] { display: none !important; }
+
+.lib-modal {
+  width: min(880px, 100%); height: min(660px, 100%);
+  background: var(--surface); border: 1px solid var(--border-hi);
+  border-radius: 14px; box-shadow: 0 16px 64px rgba(0,0,0,.7);
+  display: flex; flex-direction: column; overflow: hidden;
+  color-scheme: dark;
+  animation: slideIn .18s ease;
+}
+
+.lib-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--border);
+}
+.lib-title {
+  display: flex; align-items: center; gap: 8px;
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 16px;
+}
+.lib-search {
+  flex: 1; min-width: 0; max-width: 340px;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 20px; padding: 0 12px;
+  color: var(--text-muted); cursor: text;
+  transition: border-color .15s;
+}
+.lib-search:focus-within { border-color: var(--spotify); }
+.lib-search svg { flex-shrink: 0; }
+.lib-search input {
+  flex: 1; min-width: 0; padding: 7px 0;
+  background: transparent; border: none; outline: none;
+  color: var(--text); font-family: 'DM Mono', monospace; font-size: 11px;
+}
+.lib-search input::placeholder { color: var(--text-dim); }
+.lib-zone-pick {
+  margin-left: auto; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface3); border: 1px solid var(--border-hi);
+  border-radius: 20px; padding: 4px 8px 4px 12px;
+  font-size: 10px; color: var(--text-muted);
+}
+.lib-zone-pick .chip-dot { flex-shrink: 0; }
+.lib-zone-pick select {
+  min-width: 0; max-width: 180px;
+  background: transparent; border: none; outline: none; cursor: pointer;
+  color: var(--text); font-family: 'DM Mono', monospace; font-size: 11px;
+}
+.lib-zone-pick select option { background: var(--surface); color: var(--text); }
+.lib-close {
+  background: none; border: none; color: var(--text-muted);
+  width: 30px; height: 30px; border-radius: 50%;
+  font-size: 13px; cursor: pointer; flex-shrink: 0;
+  transition: color .12s, background .12s;
+}
+.lib-close:hover { color: var(--text); background: var(--surface2); }
+
+.lib-notice {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px; font-size: 10px; line-height: 1.5;
+  background: rgba(29,185,84,0.08); border-bottom: 1px solid var(--border);
+}
+.lib-notice span { flex: 1; }
+
+.lib-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px 1fr; }
+
+.lib-sources, .lib-tracks {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.lib-sources { border-right: 1px solid var(--border); padding: 8px; }
+
+.lib-source, .lib-track {
+  width: 100%; background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text); font-family: 'DM Mono', monospace; text-align: left; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.lib-source { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+@media (hover: hover) { /* a phone's last tap would otherwise leave a row highlighted */
+  .lib-source:hover, .lib-track:hover:not(:disabled) { background: var(--surface2); }
+}
+.lib-source.on { background: var(--surface3); border-color: var(--border-hi); }
+.lib-source.locked { opacity: .5; }
+
+.lib-cover {
+  width: 36px; height: 36px; border-radius: 4px; flex-shrink: 0; overflow: hidden;
+  background: var(--surface3); color: var(--text-muted); font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.lib-cover img { width: 100%; height: 100%; object-fit: cover; }
+.lib-cover.liked { background: linear-gradient(135deg, #4a1fd8, #8db5e6); color: #fff; }
+
+.lib-source-text, .lib-track-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lib-source-name, .lib-track-name,
+.lib-source-meta, .lib-track-artist { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-source-name, .lib-track-name { font-size: 11px; }
+.lib-source-meta, .lib-track-artist { font-size: 9px; color: var(--text-muted); }
+
+.lib-tracks-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.lib-tracks-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.lib-back {
+  display: none; background: none; border: none; color: var(--text-muted);
+  font-size: 16px; cursor: pointer; width: 32px; height: 32px; border-radius: 50%;
+}
+.lib-back:hover { color: var(--text); background: var(--surface2); }
+.lib-src-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: 'Syne', sans-serif; font-weight: 600; font-size: 13px;
+}
+.lib-open {
+  flex-shrink: 0; font-size: 10px; color: var(--text-muted); text-decoration: none;
+  transition: color .12s;
+}
+.lib-open:hover { color: var(--spotify); }
+.lib-add-all { flex-shrink: 0; }
+.lib-add-all:disabled { opacity: .5; cursor: progress; }
+
+.lib-filter-row { display: flex; padding: 10px 14px 4px; }
+
+.lib-tracks { flex: 1; min-height: 0; padding: 4px 8px 12px; }
+/* A song row: the add-to-zone button, then its ♥ (a button can't hold another button) */
+.lib-row { display: flex; align-items: center; gap: 2px; }
+.lib-row .lib-track { flex: 1; min-width: 0; }
+.lib-like, .lib-like-spacer { flex-shrink: 0; width: 32px; height: 32px; }
+.lib-like {
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none; border-radius: 50%; cursor: pointer;
+  color: var(--text-muted); transition: color .12s, background .12s;
+}
+.lib-like svg { fill: none; stroke: currentColor; stroke-width: 2; }
+.lib-like.liked { color: var(--spotify); }
+.lib-like.liked svg { fill: currentColor; }
+.lib-like:disabled { opacity: .6; cursor: progress; }
+@media (hover: hover) {
+  .lib-like:hover { color: var(--text); background: var(--surface2); }
+  .lib-like.liked:hover { color: var(--spotify); }
+}
+.lib-track {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto 24px;
+  align-items: center; gap: 10px; padding: 5px 6px;
+}
+.lib-track:disabled { opacity: .4; cursor: default; }
+.lib-track-dur { font-size: 9px; color: var(--text-muted); }
+.lib-track-act {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1px solid var(--border-hi); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; font-size: 13px;
+  transition: all .12s;
+}
+.lib-track-act::before { content: '+'; }
+.lib-track:disabled .lib-track-act { visibility: hidden; }
+.lib-track.added .lib-track-act { background: var(--accent); border-color: var(--accent); color: #0a0a0c; }
+.lib-track.added .lib-track-act::before { content: '✓'; }
+/* Touch screens keep :hover after a tap, which would show "remove" on a song just added */
+@media (hover: hover) {
+  .lib-track:hover:not(:disabled) .lib-track-act { border-color: var(--accent); color: var(--accent); }
+  .lib-track.added:hover .lib-track-act { background: var(--danger); border-color: var(--danger); color: #0a0a0c; }
+  .lib-track.added:hover .lib-track-act::before { content: '−'; }
+}
+
+.lib-empty {
+  padding: 28px 16px; text-align: center;
+  font-size: 11px; line-height: 1.7; color: var(--text-muted);
+}
+.lib-empty .btn { margin-top: 10px; }
+.lib-more { display: block; margin: 10px auto; }
+
 /* ── MOBILE LAYOUT (≤768px) ──────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   html, body {
@@ -841,7 +1030,6 @@ header {
 
   .logo { font-size: 16px; }
   .badge { font-size: 8px; padding: 2px 5px; }
-  .header-tip { display: none; }
 
   /* Stack: map first, sidebar below */
   .app {
@@ -879,10 +1067,13 @@ header {
   }
 
   .tool-btn {
-    padding: 10px 10px;
+    padding: 10px 8px;
     font-size: 11px;
     min-height: 44px;
   }
+  /* "Draw Zone" → "Draw", "Edit Zone" → "Edit", "Clear All" → "Clear" so the extra
+     Edit button still leaves the toolbar at two rows */
+  .tb-long { display: none; }
 
   .active-zone-chip { margin-left: 0; }
   .vsep { display: none; }
@@ -926,6 +1117,29 @@ header {
   /* Add track row */
   .add-track-row { margin-top: 6px; }
   .add-track-btn { padding: 8px 12px; min-height: 40px; }
+  .browse-sp-btn { min-height: 40px; font-size: 11px; }
+
+  /* Spotify library: full screen, one pane at a time */
+  .lib-overlay { padding: 0; }
+  .lib-modal { width: 100%; height: 100%; border: none; border-radius: 0; }
+  .lib-head {
+    flex-wrap: wrap;
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+  .lib-search { order: 2; flex-basis: 100%; max-width: none; }
+  .lib-search input { font-size: 16px; padding: 9px 0; } /* stops iOS zooming in on focus */
+  .lib-zone-pick { order: 3; margin-left: 0; flex-basis: 100%; }
+  .lib-zone-pick select { flex: 1; max-width: none; font-size: 13px; }
+  .lib-close { margin-left: auto; width: 40px; height: 40px; }
+  .lib-body { grid-template-columns: 1fr; }
+  .lib-sources { border-right: none; }
+  .lib-body.showing-tracks .lib-sources,
+  .lib-body:not(.showing-tracks) .lib-tracks-pane { display: none; }
+  .lib-back { display: block; width: 40px; height: 40px; }
+  .lib-source, .lib-track { min-height: 52px; }
+  .lib-like, .lib-like-spacer { width: 44px; height: 44px; }
+  .lib-tracks { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  #libFilter { font-size: 16px; } /* stops iOS zooming in on focus */
 
   /* Toast: avoid overlap with home indicator */
   .toast {
@@ -1033,7 +1247,6 @@ header {
 @media (pointer: coarse) and (orientation: landscape) and (max-height: 500px) {
   html, body { height: 100%; min-height: 0; overflow: hidden; }
   header { height: 44px; padding: 0 12px 0 16px; gap: 8px; }
-  .header-tip { display: none; }
 
   .app {
     display: grid;
