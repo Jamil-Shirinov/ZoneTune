@@ -237,6 +237,7 @@ let nextGroupId = 1;
 let selectedZoneId = zones[0].id;   // ← must come AFTER zones is defined
 let mode = 'draw';
 let drawHandler = null;
+let drawVertexCount = 0;
 let gpsWatchId = null;
 let isGpsActive = false;
 
@@ -286,8 +287,33 @@ function startDraw() {
     drawError: { color: '#ff5757', timeout: 1000 },
     guidelineDistance: 20,
   });
+  drawVertexCount = 0;
   drawHandler.enable();
 }
+
+// Hint at the Q shortcut in the on-map tooltip once a shape is in progress
+L.drawLocal.draw.handlers.polygon.tooltip.cont += '<br>Press Q to start over.';
+L.drawLocal.draw.handlers.polygon.tooltip.end  += '<br>Press Q to start over.';
+
+map.on(L.Draw.Event.DRAWVERTEX, e => { drawVertexCount = e.layers.getLayers().length; });
+
+// Last cursor position over the map, so a restarted draw handler can pick it up
+let lastMapMouseMove = null;
+map.on('mousemove', e => { lastMapMouseMove = e; });
+map.on('mouseout', () => { lastMapMouseMove = null; });
+
+// Press Q while drawing to discard the in-progress shape and start over
+document.addEventListener('keydown', e => {
+  if ((e.key !== 'q' && e.key !== 'Q') || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) return;
+  if (mode !== 'draw' || !drawHandler || drawVertexCount === 0) return;
+  startDraw();
+  // A fresh handler parks its click-catching marker at the map center, so until the mouse
+  // moves the map acts like Navigate mode; move it under the cursor straight away
+  if (lastMapMouseMove) map.fire('mousemove', lastMapMouseMove);
+  showToast('Drawing cleared — start over');
+});
 
 map.on(L.Draw.Event.CREATED, function(e) {
   if (!selectedZoneId) return;
@@ -318,7 +344,7 @@ map.on(L.Draw.Event.CREATED, function(e) {
   }
 });
 
-map.on(L.Draw.Event.DRAWSTOP, () => { drawHandler = null; });
+map.on(L.Draw.Event.DRAWSTOP, () => { drawHandler = null; drawVertexCount = 0; });
 
 // ── CANCEL DRAWING WITH "Q" ───────────────────────────────────────────────────
 // Mention the shortcut in Leaflet.draw's cursor tooltip so people can find it
