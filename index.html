@@ -107,7 +107,7 @@
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg>
         Clear<span class="tb-long"> All</span>
       </button>
-      <div class="active-zone-chip hidden" id="chipWrap" title="Double-click to zoom to this zone">
+      <div class="active-zone-chip hidden" id="chipWrap">
         <div class="chip-dot" id="chipDot"></div>
         <span id="chipName">—</span>
       </div>
@@ -203,13 +203,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-
-<!-- Blur for the glow around the zone whose music is playing (.zone-glow in style.css) -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
-  <filter id="zoneGlowBlur" x="-50%" y="-50%" width="200%" height="200%">
-    <feGaussianBlur stdDeviation="6"/>
-  </filter>
-</svg>
 <iframe id="scPlayer" src="https://w.soundcloud.com/player/?url=https://soundcloud.com/placeholder&auto_play=false"
   style="position:fixed;width:1px;height:1px;bottom:0;left:0;opacity:0;pointer-events:none;" allow="autoplay">
 </iframe>

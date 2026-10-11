@@ -37,10 +37,7 @@ let trackDuration = 0;
 let trackPosition = 0;
 let scWidget = null;
 let scReady = false;
-let scPlaying = false;
 let pendingScVolume = 1;
-let scFadeInTo = null;          // volume to fade a just-loaded SoundCloud song up to once it starts
-let fadeInNextTrack = false;    // the next song to start is the first after entering a zone
 
 
 // Initialize Firebase
@@ -77,7 +74,6 @@ async function saveZones() {
     color: z.color,
     shuffle: z.shuffle || false,
     groupId: z.groupId ?? null,
-    artChoice: z.artChoice ?? null,
     geoData: z.layer ? JSON.stringify(z.layer.toGeoJSON()) : null,
     playlist: (z.playlist || []).map(t => ({
       url: t.url || '',
@@ -108,81 +104,17 @@ async function saveZones() {
 let queue = [];
 let queueIndex = -1;
 
-// With shuffle on, a zone's order is picked ahead of time when something needs to know it (the
-// zone's popup names the song that will play first); entering the zone then uses that order.
-const plannedQueues = new Map();   // zone id → order to play in the next time the zone starts
-
-function upcomingQueue(z) {
-  if (!z.shuffle) return [...z.playlist];
-  const plan = plannedQueues.get(z.id);
-  if (plan && plan.length === z.playlist.length && plan.every(t => z.playlist.includes(t))) return plan;
-  const fresh = shuffleArray(z.playlist);
-  plannedQueues.set(z.id, fresh);
-  return fresh;
-}
-
 function buildQueue(z) {
-  queue = upcomingQueue(z);
-  plannedQueues.delete(z.id);   // the next visit gets a fresh shuffle
+  queue = z.shuffle ? shuffleArray(z.playlist) : [...z.playlist];
   queueIndex = -1;
-}
-
-// The song a zone is playing, or the one it will start with when the person walks in
-function zoneCurrentTrack(z) {
-  if (!z.playlist?.length) return null;
-  if (musicZoneId === z.id && queue.length) return queue[Math.max(queueIndex, 0)];
-  return upcomingQueue(z)[0];
 }
 
 async function advanceQueue() {
   queueIndex++;
-  if (queueIndex >= queue.length) {
-    // Past the zone's last song: loop back to the first (with shuffle on, in a fresh order)
-    const z = getZone(musicZoneId);
-    if (z?.shuffle && z.playlist.length > 1) {
-      const last = queue[queue.length - 1];
-      queue = shuffleArray(z.playlist);
-      if (queue[0] === last) queue.push(queue.shift());   // never the same song twice in a row
-    } else if (z) {
-      queue = [...z.playlist];
-    }
-    queueIndex = 0;
-  }
+  if (queueIndex >= queue.length) queueIndex = 0;
   await playQueueItem(queue[queueIndex]);
 }
 
-<<<<<<< HEAD
-// While the next song starts after one ended, the zone keeps glowing instead of flickering off
-let glowHoldUntil = 0;
-
-// A song finished by itself: play the next one, unless the person has left (or is leaving) its zone
-function autoAdvance() {
-  if (musicZoneId == null || musicZoneId !== currentZoneId) return;
-  glowHoldUntil = performance.now() + 4000;
-  setTimeout(updateZoneGlow, 4000);   // lets the glow go if the next song never starts
-  advanceQueue();
-}
-
-// The playing zone's songs or shuffle setting changed: keep the current song playing and redo what
-// comes after it, so added songs get played and removed ones don't
-function refreshQueue(z) {
-  if (!z || z.id !== musicZoneId) return;
-  const current = queue[queueIndex];
-  if (!z.shuffle) {
-    const oldIndex = queueIndex;
-    queue = [...z.playlist];
-    queueIndex = queue.indexOf(current);
-    if (queueIndex < 0 && current) {
-      // The playing song was removed: it plays to the end, then the song that took its place
-      queueIndex = Math.min(oldIndex, queue.length);
-      queue.splice(queueIndex, 0, current);
-    }
-  } else {
-    // Songs already played this round (and the current one) stay; the rest are shuffled after them
-    const done = queue.slice(0, queueIndex + 1).filter(t => t === current || z.playlist.includes(t));
-    queue = done.concat(shuffleArray(z.playlist.filter(t => !done.includes(t))));
-    queueIndex = done.length - 1;
-=======
 // ── ZONE PLAYBACK GUARD ───────────────────────────────────────────────────────
 // zoneGen changes every time the person's zone changes, and playGen/playType record
 // which zoneGen the current music was started for and on which player. Music that
@@ -216,24 +148,16 @@ function stopZoneMusic() {
     spotifyPlayer.getCurrentState()
       .then(state => { if (state && !state.paused) return spotifyPlayer.pause(); })
       .catch(() => {});
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   }
 }
 
 async function playQueueItem(track) {
   if (!track) return;
-<<<<<<< HEAD
-  stopVolumeRamp();
-  const vol = track.volume ?? 100;
-  const fadeIn = fadeInNextTrack;   // first song after entering a zone starts silent and fades in
-  syncVolumeSlider(vol);
-=======
   // This music belongs to the person's current zone
   playGen = zoneGen;
   playType = track.type;
   const vol = (track.volume ?? 100) / 100;
   syncVolumeSlider(track.volume ?? 100);
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   if (track.type === 'spotify') {
     if (scWidget && scReady) scWidget.pause();
     // The Spotify device only exists once the Web Playback SDK fires 'ready'.
@@ -249,19 +173,15 @@ async function playQueueItem(track) {
       } else {
         showToast('Spotify player is still connecting — music will start when it is ready', 4000);
       }
-      return;   // fadeInNextTrack stays set, so the deferred start still fades in
+      return;
     }
     pendingSpotifyTrack = null;
-    fadeInNextTrack = false;
-    await setPlayerVolume('spotify', fadeIn ? 0 : vol);
+    await spotifyPlayer.setVolume(vol);
     await playTrackList([track.uri]);
-    if (fadeIn) rampVolume('spotify', vol);
   } else if (track.type === 'soundcloud') {
     pendingSpotifyTrack = null;
-    fadeInNextTrack = false;
     if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause();
-    pendingScVolume = fadeIn ? 0 : vol;
-    scFadeInTo = fadeIn ? vol : null;   // the ramp starts on the widget's PLAY event
+    pendingScVolume = track.volume ?? 100;
     playSoundcloudTrack(track);
   }
 }
@@ -275,7 +195,6 @@ function playSoundcloudTrack(track) {
   console.log('playSoundcloudTrack called', track);
   console.log('scWidget:', scWidget, 'scReady:', scReady);
   if (!scWidget || !scReady) { showToast('SoundCloud player not ready'); return; }
-  scWidget.setVolume(pendingScVolume);   // so a fading-in song doesn't blip at the old volume
   scWidget.load(track.permalink, {
     auto_play: true,
     buying: false, liking: false, download: false,
@@ -331,7 +250,6 @@ async function loadZonesFromCloud(uid) {
             url: String(t.url || ''),
             uri,
             label: String(t.label || '').slice(0, 100).replace(/<[^>]*>/g, ''),
-            artworkUrl: safeImageUrl(t.artworkUrl),
             type: 'spotify',
             volume: t.volume ?? 100,
           };
@@ -342,8 +260,7 @@ async function loadZonesFromCloud(uid) {
           layer: restoredLayer,
           playlist: validatedPlaylist,
           shuffle: cloudZone.shuffle || false,
-          groupId: cloudZone.groupId ?? null,
-          artChoice: cloudZone.artChoice === 'none' ? 'none' : safeImageUrl(cloudZone.artChoice),
+          groupId: cloudZone.groupId ?? null
         };
       });
 
@@ -705,109 +622,26 @@ function attachLayerEvents(layer, z) {
 }
 
 function openZonePopup(layer, z) {
-  const track = zoneCurrentTrack(z);
-  const musicHtml = track
+  const musicHtml = z.spotifyUrl
     ? `<div class="popup-music">
-         <span class="popup-music-label">Current track:</span>
-         <span class="popup-track">${esc(track.label || 'Untitled')}</span>
+         <svg width="12" height="12" viewBox="0 0 24 24" fill="${z.color}"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424a.622.622 0 01-.857.207c-2.348-1.435-5.304-1.76-8.785-.964a.622.622 0 11-.277-1.215c3.809-.87 7.076-.496 9.712 1.115a.623.623 0 01.207.857zm1.223-2.722a.78.78 0 01-1.072.257c-2.687-1.652-6.785-2.13-9.965-1.166a.78.78 0 01-.973-.519.781.781 0 01.52-.972c3.633-1.102 8.147-.568 11.233 1.328a.78.78 0 01.257 1.072zm.105-2.835C14.692 8.95 9.375 8.775 6.297 9.71a.937.937 0 11-.543-1.795c3.528-1.068 9.396-.862 13.105 1.333a.938.938 0 01-.945 1.619z"/></svg>
+         Spotify linked
        </div>`
-    : `<div class="popup-no-music">No music selected</div>`;
+    : `<div class="popup-no-music">No music assigned</div>`;
+
+  const openBtn = z.spotifyUrl
+    ? `<a class="popup-btn" href="${esc(z.spotifyUrl)}" target="_blank">Open ↗</a>` : '';
 
   layer.bindPopup(`
     <div>
       <div class="popup-name" style="color:${z.color}">${esc(z.name)}</div>
       ${musicHtml}
       <div class="popup-actions">
+        ${openBtn}
         <button class="popup-btn del" onclick="deleteZone(${z.id})">Delete zone</button>
       </div>
     </div>
   `, { maxWidth: 220, closeButton: true }).openPopup();
-}
-
-// ── ZONE ALBUM ART ────────────────────────────────────────────────────────────
-// Each drawn zone with a song that has album art shows that art in the middle of its shape.
-// z.artChoice: null = the first song's art, 'none' = no art, otherwise the chosen art's URL
-// (falls back to the first song's art once no song in the zone uses it any more).
-
-// The zone's distinct album art, each with the songs that use it
-function zoneArtOptions(z) {
-  const options = [];
-  (z.playlist || []).forEach(t => {
-    const url = safeImageUrl(t.artworkUrl);
-    if (!url) return;
-    const o = options.find(o => o.url === url);
-    if (o) o.labels.push(t.label);
-    else options.push({ url, labels: [t.label] });
-  });
-  return options;
-}
-
-function zoneArtUrl(z) {
-  if (z.artChoice === 'none') return null;
-  const urls = zoneArtOptions(z).map(o => o.url);
-  return urls.includes(z.artChoice) ? z.artChoice : (urls[0] || null);
-}
-
-// Scales with the zone on screen (up to 72px) so it never spills out of a small zone
-function zoneArtSize(layer) {
-  const b = layer.getBounds();
-  const nw = map.latLngToContainerPoint(b.getNorthWest());
-  const se = map.latLngToContainerPoint(b.getSouthEast());
-  return Math.min(72, Math.round(Math.min(se.x - nw.x, se.y - nw.y) * 0.45));
-}
-
-const artMarkers = new Map();   // zone id → marker showing that zone's art
-
-// Bring the art on the map in line with the zones; cheap enough to run after every render
-function syncZoneArt() {
-  for (const [id, marker] of artMarkers) {
-    if (!getZone(id)) { map.removeLayer(marker); artMarkers.delete(id); }
-  }
-  zones.forEach(z => {
-    const url = z.layer ? zoneArtUrl(z) : null;
-    const size = url ? zoneArtSize(z.layer) : 0;
-    let marker = artMarkers.get(z.id);
-    if (size < 20) {   // no art, or the zone is too small on screen to fit it
-      if (marker) { map.removeLayer(marker); artMarkers.delete(z.id); }
-      return;
-    }
-    const center = z.layer.getCenter();
-    if (!marker) {
-      // Not interactive: clicks and taps go through to the zone and to drawing
-      marker = L.marker(center, { interactive: false, keyboard: false, zIndexOffset: -1000 }).addTo(map);
-      artMarkers.set(z.id, marker);
-    } else {
-      marker.setLatLng(center);
-    }
-    const key = `${url} ${size} ${z.color}`;
-    if (marker.artKey !== key) {
-      marker.artKey = key;
-      marker.setIcon(L.divIcon({
-        className: 'zone-art',
-        iconSize: [size, size],
-        html: `<img src="${esc(url)}" alt="" style="border-color:${z.color}" onerror="this.style.display='none'">`,
-      }));
-    }
-  });
-}
-map.on('zoomend', syncZoneArt);
-
-// Spotify songs saved before album art was stored have none, and ones added before Spotify was
-// connected have a bare URI for a name; look them up once and save what's found
-async function backfillSpotifyDetails() {
-  const incomplete = zones.flatMap(z => z.playlist || [])
-    .filter(t => t.type === 'spotify' && (!t.artworkUrl || t.label === t.uri));
-  if (!incomplete.length) return;
-  let changed = false;
-  await Promise.all(incomplete.map(async t => {
-    const { title, artworkUrl } = await fetchSpotifyOembed(t.uri);
-    if (!t.artworkUrl && artworkUrl) { t.artworkUrl = artworkUrl; changed = true; }
-    if (t.label === t.uri && title) { t.label = title; changed = true; }
-  }));
-  if (changed) {
-    saveZones();
-    render();
-  }
 }
 
 // ── MODE ─────────────────────────────────────────────────────────────────────
@@ -884,49 +718,24 @@ function addGroup() {
 }
 
 
-// Group renaming works like zone renaming: Edit turns the name into a text box, and Enter (key or
-// button) finishes it. Groups being edited, with the text typed so far (kept across re-renders):
-const groupNameDrafts = new Map();
-
-function groupNameInput(id) {
-  return document.querySelector(`.group-header[data-group-id="${id}"] .group-name-inp`);
-}
-
-function startGroupEdit(id) {
+// Returns the group's name after the attempt, so the caller can revert a rejected edit
+function renameGroup(id, val) {
   const g = groups.find(g => g.id === id);
-  if (!g) return;
-  groupNameDrafts.set(id, g.name);
-  render();
-  const inp = groupNameInput(id);
-  if (inp) { inp.focus(); inp.select(); }
-}
-
-// An empty name keeps the old one. A name another group already has is refused, and the
-// box stays open so it can be changed (Escape gives up instead).
-function finishGroupEdit(id) {
-  const g = groups.find(g => g.id === id);
-  if (!g || !groupNameDrafts.has(id)) return;
-  const name = sanitizeName(groupNameDrafts.get(id).trim());
-  if (name && groups.some(o => o.id !== id && o.name.toLowerCase() === name.toLowerCase())) {
+  if (!g) return '';
+  const name = sanitizeName(val.trim());
+  if (!name) return g.name;
+  if (groups.some(o => o.id !== id && o.name.toLowerCase() === name.toLowerCase())) {
     showToast('Group already exists.');
-    groupNameInput(id)?.focus();
-    return;
+    return g.name;
   }
-  if (name && name !== g.name) {
+  if (name !== g.name) {
     g.name = name;
     saveZones();
   }
-  groupNameDrafts.delete(id);
-  render();
-}
-
-function cancelGroupEdit(id) {
-  groupNameDrafts.delete(id);
-  render();
+  return g.name;
 }
 
 function deleteGroup(id) {
-  groupNameDrafts.delete(id);
   zones.forEach(z => { if (z.groupId === id) z.groupId = null; });
   groups = groups.filter(g => g.id !== id);
   saveZones();
@@ -1108,28 +917,6 @@ async function resolveSoundcloudLink(raw) {
   };
 }
 
-// Track title and album art from Spotify's public oEmbed endpoint. It needs no Spotify login,
-// so both also work for songs added before Spotify was connected.
-async function fetchSpotifyOembed(uri) {
-  try {
-    const trackUrl = `https://open.spotify.com/track/${uri.split(':').pop()}`;
-    const res = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(trackUrl)}`);
-    if (!res.ok) return {};
-    const data = await res.json();
-    return {
-      title: typeof data.title === 'string' ? data.title.slice(0, 100).replace(/<[^>]*>/g, '') : null,
-      artworkUrl: safeImageUrl(data.thumbnail_url),
-    };
-  } catch (e) {
-    return {};
-  }
-}
-
-// Image URLs come from third-party responses and saved data, and end up in src attributes
-function safeImageUrl(url) {
-  return typeof url === 'string' && /^https:\/\/[^\s"'<>]+$/.test(url) ? url : null;
-}
-
 function sanitizeName(val) {
   return val.replace(/<[^>]*>/g, '').slice(0, 40);
 }
@@ -1165,10 +952,8 @@ async function addTrack(zoneId, url) {
   if (type === 'spotify') {
     const uri = extractSpotifyUri(url.trim());
     if (!uri || !uri.includes(':track:')) { showToast('Please paste a Spotify track URL'); return; }
-    const [apiLabel, oembed] = await Promise.all([fetchTrackLabel(url.trim(), uri), fetchSpotifyOembed(uri)]);
-    // Without Spotify connected the API label is just the URI; the oEmbed title beats that
-    const label = apiLabel === uri && oembed.title ? oembed.title : apiLabel;
-    z.playlist.push({ url: url.trim(), uri, label, artworkUrl: oembed.artworkUrl || null, type: 'spotify', volume: 100 });
+    const label = await fetchTrackLabel(url.trim(), uri);
+    z.playlist.push({ url: url.trim(), uri, label, type: 'spotify', volume: 100 });
 
   } else if (type === 'soundcloud') {
     showToast('Loading from SoundCloud…', 30000);
@@ -1200,7 +985,6 @@ async function addTrack(zoneId, url) {
         (z.playlist.length >= MAX_ZONE_TRACKS ? ` (zone is now full: max ${MAX_ZONE_TRACKS})` : ''), 4000);
   }
 
-  refreshQueue(z);
   saveZones();
   render();
 }
@@ -1209,7 +993,6 @@ function removeTrack(zoneId, index) {
   const z = getZone(zoneId);
   if (!z) return;
   z.playlist.splice(index, 1);
-  refreshQueue(z);
   saveZones();
   render();
 }
@@ -1266,96 +1049,6 @@ function finishZoneEdit(id, val) {
   render();
 }
 
-// ── ZONE "EDIT" MENU ──────────────────────────────────────────────────────────
-// A popover on <body> (so the sidebar's scrolling can't clip it) with "Rename" and
-// "Change album art", which swaps the menu for a list of the zone's album art.
-let zoneMenu = null;   // { el, zoneId, anchor } while open
-
-function toggleZoneMenu(zoneId, anchor) {
-  const wasOpen = zoneMenu?.zoneId === zoneId;
-  closeZoneMenu();
-  if (wasOpen) return;
-  const el = document.createElement('div');
-  el.className = 'zone-menu';
-  el.setAttribute('role', 'menu');
-  document.body.appendChild(el);
-  zoneMenu = { el, zoneId, anchor };
-  anchor.setAttribute('aria-expanded', 'true');
-  el.innerHTML = `
-    <button class="zone-menu-item" role="menuitem" data-act="rename">Rename</button>
-    <button class="zone-menu-item" role="menuitem" data-act="art">Change album art</button>`;
-  el.querySelector('[data-act="rename"]').addEventListener('click', () => {
-    closeZoneMenu();
-    startZoneEdit(zoneId);
-  });
-  el.querySelector('[data-act="art"]').addEventListener('click', showArtPicker);
-  positionZoneMenu();
-  el.querySelector('button').focus();
-}
-
-function closeZoneMenu() {
-  if (!zoneMenu) return;
-  zoneMenu.el.remove();
-  zoneMenu.anchor.setAttribute('aria-expanded', 'false');
-  zoneMenu = null;
-}
-
-function showArtPicker() {
-  const z = getZone(zoneMenu.zoneId);
-  if (!z) return closeZoneMenu();
-  const options = zoneArtOptions(z);
-  const current = zoneArtUrl(z) || 'none';
-  const option = (value, thumb, label) => `
-    <button class="zone-menu-item art-option${value === current ? ' current' : ''}" role="menuitemradio"
-            aria-checked="${value === current}" data-art="${esc(value)}">
-      ${thumb}<span class="art-option-label">${esc(label)}</span>
-    </button>`;
-  zoneMenu.el.innerHTML = `
-    <div class="zone-menu-title">Album art for ${esc(z.name)}</div>
-    ${options.map(o => option(o.url, `<img class="art-thumb" src="${esc(o.url)}" alt="">`, o.labels.join(', '))).join('')}
-    ${option('none', '<span class="art-thumb no-art"></span>', 'No Album Art')}
-    ${options.length ? '' : '<div class="zone-menu-note">Add a song to this zone to choose its album art.</div>'}
-    ${z.layer ? '' : '<div class="zone-menu-note">Draw this zone on the map to see its art there.</div>'}`;
-  zoneMenu.el.querySelectorAll('.art-option').forEach(btn => btn.addEventListener('click', () => {
-    z.artChoice = btn.dataset.art;
-    saveZones();
-    syncZoneArt();
-    const anchor = zoneMenu.anchor;
-    closeZoneMenu();
-    anchor.focus();
-  }));
-  positionZoneMenu();
-  (zoneMenu.el.querySelector('.art-option.current') || zoneMenu.el.querySelector('button')).focus();
-}
-
-// Below the Edit button, or above it when there's no room below; always fully on screen
-function positionZoneMenu() {
-  const { el, anchor } = zoneMenu;
-  const a = anchor.getBoundingClientRect();
-  const w = el.offsetWidth, h = el.offsetHeight;
-  const left = Math.max(8, Math.min(a.right - w, innerWidth - w - 8));
-  let top = a.bottom + 4;
-  if (top + h > innerHeight - 8) top = Math.max(8, a.top - h - 4);
-  el.style.left = left + 'px';
-  el.style.top = top + 'px';
-}
-
-// Close on a tap/click elsewhere, Escape, or anything that would leave it floating away from its button
-document.addEventListener('pointerdown', e => {
-  if (zoneMenu && !zoneMenu.el.contains(e.target) && !zoneMenu.anchor.contains(e.target)) closeZoneMenu();
-}, true);
-document.addEventListener('keydown', e => {
-  if (zoneMenu && e.key === 'Escape') {
-    const anchor = zoneMenu.anchor;
-    closeZoneMenu();
-    anchor.focus();
-  }
-});
-document.addEventListener('scroll', e => {
-  if (zoneMenu && !zoneMenu.el.contains(e.target)) closeZoneMenu();
-}, true);
-window.addEventListener('resize', () => closeZoneMenu());
-
 function appendZoneRow(parent, z) {
   const editing = editingZoneIds.has(z.id);
   const div = document.createElement('div');
@@ -1367,10 +1060,8 @@ function appendZoneRow(parent, z) {
     ${editing
       ? `<input class="zone-name-inp" value="${esc(z.name)}" maxlength="40" placeholder="Zone name">
          <button class="zone-name-btn enter" title="Save name">Enter</button>`
-      : `<span class="zone-name" title="Double-click to zoom to this zone · drag onto a group to move">${esc(z.name)}</span>
-         <button class="zone-name-btn" title="Edit zone" aria-haspopup="menu" aria-expanded="false">
-           Edit<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>
-         </button>`}
+      : `<span class="zone-name" title="Drag onto a group to move">${esc(z.name)}</span>
+         <button class="zone-name-btn" title="Rename zone">Edit</button>`}
     <span class="zone-mapped" title="${z.layer ? 'Mapped' : 'Not drawn yet'}">${z.layer ? '◉' : '○'}</span>
     <button class="del-btn" title="Delete zone">✕</button>
   `;
@@ -1378,7 +1069,7 @@ function appendZoneRow(parent, z) {
   div.querySelector('.zone-name-btn').addEventListener('click', e => {
     e.stopPropagation();
     if (editing) finishZoneEdit(z.id, nameInp.value);
-    else toggleZoneMenu(z.id, e.currentTarget);
+    else startZoneEdit(z.id);
   });
   if (editing) {
     nameInp.addEventListener('input', e => renameZone(z.id, e.target.value));
@@ -1509,7 +1200,6 @@ function setupDropTarget(headerEl, groupId) {
 
 // ── RENDER SIDEBAR ────────────────────────────────────────────────────────────
 function render() {
-  closeZoneMenu();   // its Edit button is about to be replaced
   const gl = document.getElementById('groupsList');
   gl.innerHTML = '';
 
@@ -1527,34 +1217,23 @@ function render() {
 
   // Group sections
   groups.forEach(g => {
-    const editing = groupNameDrafts.has(g.id);
     const section = document.createElement('div');
     section.className = 'group-section';
     section.innerHTML = `
       <div class="group-header drop-target" data-group-id="${g.id}">
-        ${editing
-          ? `<input class="group-name-inp" value="${esc(groupNameDrafts.get(g.id))}" maxlength="40" placeholder="Group name">
-             <button class="zone-name-btn group-name-btn enter" title="Save name">Enter</button>`
-          : `<span class="group-name" title="${esc(g.name)}">${esc(g.name)}</span>
-             <button class="zone-name-btn group-name-btn" title="Rename group">Edit</button>`}
+        <input class="group-name-inp" value="${esc(g.name)}" maxlength="40" placeholder="Group name" title="Rename group">
         <button class="group-del-btn" title="Delete group">✕</button>
       </div>
       <div class="group-zones"></div>
     `;
     section.querySelector('.group-del-btn').addEventListener('click', e => { e.stopPropagation(); deleteGroup(g.id); });
-    section.querySelector('.group-name-btn').addEventListener('click', e => {
-      e.stopPropagation();
-      if (editing) finishGroupEdit(g.id);
-      else startGroupEdit(g.id);
+    // Commit on Enter or blur; Escape abandons the edit
+    const nameInp = section.querySelector('.group-name-inp');
+    nameInp.addEventListener('change', () => { nameInp.value = renameGroup(g.id, nameInp.value); });
+    nameInp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') nameInp.blur();
+      if (e.key === 'Escape') { nameInp.value = g.name; nameInp.blur(); }
     });
-    if (editing) {
-      const nameInp = section.querySelector('.group-name-inp');
-      nameInp.addEventListener('input', () => groupNameDrafts.set(g.id, nameInp.value));
-      nameInp.addEventListener('keydown', e => {
-        if (e.key === 'Enter') finishGroupEdit(g.id);
-        if (e.key === 'Escape') cancelGroupEdit(g.id);
-      });
-    }
     const gZones = zones.filter(z => z.groupId === g.id);
     gZones.forEach(z => appendZoneRow(section.querySelector('.group-zones'), z));
     setupDropTarget(section.querySelector('.group-header'), g.id);
@@ -1651,9 +1330,13 @@ function render() {
         if (!zone) return;
         zone.playlist[idx].volume = +slider.value;
         if (queue[queueIndex] === zone.playlist[idx]) {
+          const vol = +slider.value / 100;
           syncVolumeSlider(+slider.value);
-          stopVolumeRamp();   // a manual change wins over an enter/exit fade
-          setPlayerVolume(zone.playlist[idx].type, +slider.value);
+          if (zone.playlist[idx].type === 'spotify' && spotifyPlayer) {
+            spotifyPlayer.setVolume(vol);
+          } else if (zone.playlist[idx].type === 'soundcloud' && scWidget && scReady) {
+            scWidget.setVolume(+slider.value);
+          }
         }
       });
         slider.addEventListener('change', () => saveZones());
@@ -1661,9 +1344,6 @@ function render() {
 
     ml.appendChild(div);
   });
-
-  syncZoneArt();
-  updateZoneGlow();   // zones may have been redrawn or deleted
 }
 
 // ── SIDEBAR TOGGLE ────────────────────────────────────────────────────────────
@@ -1683,51 +1363,6 @@ function toggleSidebar(collapse) {
 try {
   if (localStorage.getItem('sidebarCollapsed') === '1') toggleSidebar(true);
 } catch (e) {}
-
-// ── ZOOM TO ZONE ──────────────────────────────────────────────────────────────
-// Double-clicking (or double-tapping) a zone in the sidebar list, or the zone chip in the map
-// toolbar, zooms the map to that zone.
-const DOUBLE_CLICK_MS = 400;
-
-function zoomToZone(id) {
-  const z = getZone(id);
-  if (!z) return;
-  if (!z.layer) {
-    showToast(`${z.name} isn't drawn on the map yet`);
-    return;
-  }
-  // On a phone the map sits above the list; bring it back into view first
-  document.getElementById('map').scrollIntoView({ block: 'nearest' });
-  const bounds = z.layer.getBounds();
-  const options = { padding: [40, 40], maxZoom: 18 };
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) map.fitBounds(bounds, options);
-  else map.flyToBounds(bounds, { ...options, duration: 0.8 });
-}
-
-// Counted by hand from clicks rather than using dblclick: the first click re-renders the list
-// under the pointer, and iOS Safari doesn't send dblclick for a double tap.
-function onDoubleClick(el, keyOf, handler) {
-  let last = { key: null, time: 0 };
-  el.addEventListener('click', e => {
-    const key = keyOf(e);
-    if (key == null) return;
-    const now = performance.now();
-    if (key === last.key && now - last.time < DOUBLE_CLICK_MS) {
-      last = { key: null, time: 0 };
-      handler(key);
-    } else {
-      last = { key, time: now };
-    }
-  });
-}
-
-onDoubleClick(document.getElementById('groupsList'), e => {
-  const row = e.target.closest('.zone-row');
-  // Not the row's buttons or name box, and not the tap that ends a hold-and-drag
-  if (!row || e.target.closest('button, input') || touchDragJustEnded) return null;
-  return +row.dataset.zoneId;
-}, zoomToZone);
-onDoubleClick(document.getElementById('chipWrap'), () => selectedZoneId, zoomToZone);
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function getZone(id) { return zones.find(z => z.id === id); }
@@ -1883,15 +1518,11 @@ function initPlayer() {
   });
 
   spotifyPlayer.addListener('player_state_changed', state => {
-<<<<<<< HEAD
-    onSpotifyState(state);
-=======
     if (!state) return;
     // Started for a zone the person has already left (see zoneGen)
     if (!state.paused && !mayPlay('spotify')) spotifyPlayer.pause().catch(() => {});
     // Only update UI,  on't advance queue — advanceQueue is called explicitly
     updatePlayerUI(state);
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   });
 
   spotifyPlayer.addListener('initialization_error', ({ message }) => {
@@ -2069,8 +1700,11 @@ async function setVolume(val) {
     );
     if (slider) slider.value = val;
   }
-  stopVolumeRamp();   // a manual change wins over an enter/exit fade
-  await setPlayerVolume(track?.type === 'soundcloud' ? 'soundcloud' : 'spotify', +val);
+  if (track?.type === 'soundcloud') {
+    if (scWidget && scReady) scWidget.setVolume(+val);
+  } else {
+    if (spotifyPlayer) await spotifyPlayer.setVolume(val / 100);
+  }
 }
 
 async function seekTo(e) {
@@ -2086,7 +1720,6 @@ function toggleShuffle(zoneId) {
   const z = getZone(zoneId);
   if (!z) return;
   z.shuffle = !z.shuffle;
-  refreshQueue(z);
   saveZones();
   render();
   showToast(z.shuffle ? `Shuffle on for ${z.name}` : `Shuffle off for ${z.name}`);
@@ -2107,7 +1740,6 @@ function updatePlayerUI(state) {
   if (!track) return;
 
   currentlyPlaying = !state.paused;
-  updateZoneGlow();
   trackDuration = state.duration;
   trackPosition = state.position;
 
@@ -2146,40 +1778,12 @@ function updatePlayerUI(state) {
       if (pos >= trackDuration) clearInterval(progressTimer);
     }, 500);
   }
+
+  if (state.paused && state.position === 0 && 
+    state.track_window?.previous_tracks?.length > 0 &&
+    !state.track_window?.current_track) {
+  advanceQueue();
 }
-
-// Every state update from the Spotify player
-function onSpotifyState(state) {
-  if (!state) return;
-  checkSpotifySongEnded(state);   // first, so the glow is held before the UI sees "paused"
-  updatePlayerUI(state);
-}
-
-// The Web Playback SDK has no "song ended" event, so watch the song we started for its end: it
-// stops at the start after having played to the end, or Spotify moves on to a song of its own
-// (autoplay). Either way the zone's next song plays.
-let spotifyWatch = null;   // { uri, position, duration, at } from the last update while our song played
-
-function checkSpotifySongEnded(state) {
-  const expected = queue[queueIndex];
-  if (expected?.type !== 'spotify') { spotifyWatch = null; return; }
-  const cur = state.track_window?.current_track;
-  const isOurs = (cur?.linked_from?.uri || cur?.uri) === expected.uri;
-  if (isOurs && !state.paused) {
-    spotifyWatch = { uri: expected.uri, position: state.position, duration: state.duration, at: Date.now() };
-    return;
-  }
-  // Only once our song has been seen playing; ignores late updates about the song before it
-  const watch = spotifyWatch?.uri === expected.uri ? spotifyWatch : null;
-  spotifyWatch = null;
-  if (!watch) return;
-  const playedTo = watch.position + (Date.now() - watch.at);
-  const stoppedAtEnd = state.paused
-    && (state.position === 0 || state.position >= watch.duration - Math.min(1500, watch.duration * 0.05))
-    && playedTo >= watch.duration - Math.min(3000, watch.duration * 0.1);
-  const spotifyMovedOn = !isOurs && !state.paused;
-  // Anything else is a pause part-way through (by the user or a fade-out): nothing to do
-  if (stoppedAtEnd || spotifyMovedOn) autoAdvance();
 }
 
 function updatePlayerUIForSoundcloud() {
@@ -2794,18 +2398,11 @@ function placePerson() {
 function removePerson() {
   if (personMarker) { map.removeLayer(personMarker); personMarker = null; }
   personVisible = false;
-<<<<<<< HEAD
-  if (currentZoneId != null) {   // taking the person off the map counts as leaving the zone
-    currentZoneId = null;
-    onPersonZoneChange(null);
-  }
-=======
   currentZoneId = null;
   // No person, no zone: stop the music (the player bar is hidden below, so it
   // couldn't be paused by hand either)
   zoneGen++;
   stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   document.getElementById('btnPerson').classList.remove('on');
   document.getElementById('btnPersonLabel').textContent = 'Add Person';
   document.getElementById('nowPlaying').classList.remove('show');
@@ -2903,141 +2500,26 @@ function pointInLeafletPolygon(latlng, layer) {
   return inside;
 }
 
-// ── ENTERING / LEAVING ZONES: FADES AND GLOW ─────────────────────────────────
-// Music fades in over FADE_MS when the person enters a zone and fades out over FADE_MS when
-// they leave it; the zone glows (fading in and out with the music) while its music plays.
-const FADE_MS = 2000;
-let zoneChangeSeq = 0;      // bumped on every zone change, so an older change still fading gives way
-let musicZoneId = null;     // zone whose songs are playing, or still fading out
-let playerLevel = 100;      // last volume (0-100) given to whichever player is in use
-let rampSeq = 0;
-
-function activeTrackType() {
-  return queue[queueIndex]?.type === 'soundcloud' ? 'soundcloud' : 'spotify';
-}
-
-function setPlayerVolume(type, pct) {
-  playerLevel = pct;
-  if (type === 'soundcloud') {
-    if (scWidget && scReady) scWidget.setVolume(pct);
-    return Promise.resolve();
-  }
-  return spotifyPlayer ? spotifyPlayer.setVolume(pct / 100).catch(() => {}) : Promise.resolve();
-}
-
-// Glide the volume from where it is now to `to` over FADE_MS. Another ramp or a manual volume
-// change cancels it; resolves true only if it ran to the end.
-function rampVolume(type, to) {
-  const seq = ++rampSeq;
-  const from = playerLevel;
-  const start = performance.now();
-  return new Promise(resolve => {
-    (function step() {
-      if (seq !== rampSeq) return resolve(false);
-      const t = Math.min(1, (performance.now() - start) / FADE_MS);
-      setPlayerVolume(type, from + (to - from) * t);
-      if (t < 1) setTimeout(step, 50);
-      else resolve(true);
-    })();
-  });
-}
-
-function stopVolumeRamp() { rampSeq++; }
-
-// Fade whatever is playing down to silence, then pause it and put its volume back for next time
-async function fadeOutMusic(seq) {
-  const spotifyOn = !!spotifyPlayer && currentlyPlaying;
-  const scOn = !!scWidget && scReady && scPlaying;
-  const type = spotifyOn ? 'spotify' : 'soundcloud';
-  if (spotifyOn || scOn) await rampVolume(type, 0);
-  if (seq !== zoneChangeSeq) return;   // the person moved again during the fade; that change decides
-  if (spotifyPlayer && currentlyPlaying) await spotifyPlayer.pause().catch(() => {});
-  if (scWidget && scReady) scWidget.pause();
-  if (spotifyOn || scOn) setPlayerVolume(type, queue[queueIndex]?.volume ?? 100);
-}
-
-const glowLayers = new Map();   // zone id → blurred outline drawn behind that zone
-
-// The zone the person is in glows while its music is playing; any other glow fades out
-function updateZoneGlow() {
-  const playing = currentlyPlaying || scPlaying || performance.now() < glowHoldUntil;
-  const glowId = playing && musicZoneId != null && musicZoneId === currentZoneId ? musicZoneId : null;
-  for (const [id, glow] of glowLayers) {
-    const z = getZone(id);
-    if (!z?.layer) {   // zone deleted or its shape cleared
-      clearTimeout(glow.fadeTimer);
-      map.removeLayer(glow);
-      glowLayers.delete(id);
-      continue;
-    }
-    glow.setLatLngs(z.layer.getLatLngs());   // follow a redrawn shape
-    if (id !== glowId && !glow.fadeTimer) {
-      glow.getElement().classList.remove('on');   // CSS fades it out over 2s
-      glow.fadeTimer = setTimeout(() => { map.removeLayer(glow); glowLayers.delete(id); }, FADE_MS);
-    }
-  }
-  const z = glowId != null ? getZone(glowId) : null;
-  if (!z?.layer) return;
-  let glow = glowLayers.get(glowId);
-  if (!glow) {
-    glow = L.polygon(z.layer.getLatLngs(), {
-      className: 'zone-glow', color: z.color, weight: 12, opacity: 0.9, fill: false, interactive: false,
-    }).addTo(map);
-    glow.bringToBack();   // under the zone, so the zone's own border stays crisp
-    glowLayers.set(glowId, glow);
-    glow.getElement().getBoundingClientRect();   // lay it out invisible first so the fade-in runs
-  }
-  clearTimeout(glow.fadeTimer);
-  glow.fadeTimer = null;
-  glow.getElement().classList.add('on');
-}
-
 async function onPersonZoneChange(zoneId) {
-<<<<<<< HEAD
-  const seq = ++zoneChangeSeq;
-=======
   const gen = ++zoneGen;
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
   const pulse = document.getElementById('personPulse');
   if (pulse) pulse.classList.toggle('in-zone', !!zoneId);
   pendingSpotifyTrack = null; // a track waiting for the player belongs to the old zone
-  fadeInNextTrack = false;
-  glowHoldUntil = 0;
-  updateZoneGlow();           // the zone just left starts fading its glow straight away
 
-<<<<<<< HEAD
-  const z = zoneId ? getZone(zoneId) : null;
-  if (!z) {
-=======
   if (!zoneId) {
     stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     document.getElementById('npZoneLabel').textContent = 'Outside zones';
-  } else {
-    showToast(`Entered: ${z.name}`);
-    document.getElementById('npZoneLabel').textContent = z.name;
-    document.getElementById('nowPlaying').classList.add('show');
-    // Stepped back into the zone whose music is still fading out: bring it back up, don't restart it
-    if (z.id === musicZoneId && (currentlyPlaying || scPlaying)) {
-      rampVolume(activeTrackType(), queue[queueIndex]?.volume ?? 100);
-      updateZoneGlow();
-      return;
-    }
+    return;
   }
 
-  // The zone just left (if any) fades out before this zone's music fades in
-  await fadeOutMusic(seq);
-  if (seq !== zoneChangeSeq) return;
-  musicZoneId = null;
+  const z = getZone(zoneId);
   if (!z) return;
 
+  showToast(`Entered: ${z.name}`);
+  document.getElementById('npZoneLabel').textContent = z.name;
+  document.getElementById('nowPlaying').classList.add('show');
+
   if (z.playlist && z.playlist.length > 0) {
-<<<<<<< HEAD
-    musicZoneId = z.id;
-    fadeInNextTrack = true;
-    buildQueue(z);
-=======
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     try {
       await queuePlayback(async () => {
         if (gen !== zoneGen) return; // the person moved on while an earlier start finished
@@ -3050,10 +2532,7 @@ async function onPersonZoneChange(zoneId) {
       showToast('Could not start music: ' + (e?.message || e), 6000);
     }
   } else {
-<<<<<<< HEAD
-=======
     stopZoneMusic();
->>>>>>> 312b56b1fca426800ef113477e8718c43aa81485
     document.getElementById('npTrack').textContent = 'No tracks assigned';
     document.getElementById('npArtist').textContent = '';
   }
@@ -3119,29 +2598,14 @@ function initSoundcloud() {
     console.log('SoundCloud widget ready ✓');
   });
   scWidget.bind(SC.Widget.Events.FINISH, () => {
-    scPlaying = false;
-    autoAdvance();
-    updateZoneGlow();
-  });
-  scWidget.bind(SC.Widget.Events.PAUSE, () => {
-    scPlaying = false;
-    updateZoneGlow();
+    advanceQueue();
   });
   scWidget.bind(SC.Widget.Events.PLAY, () => {
     // Loaded for a zone the person has already left (see zoneGen)
     if (!mayPlay('soundcloud')) { scWidget.pause(); return; }
     console.log('SC PLAY event fired');
-    scPlaying = true;
-    if (scFadeInTo != null) {   // first song after entering a zone: fade in from silence
-      pendingScVolume = scFadeInTo;   // pausing and resuming later plays at the full level
-      scFadeInTo = null;
-      setPlayerVolume('soundcloud', 0);
-      rampVolume('soundcloud', pendingScVolume);
-    } else {
-      setPlayerVolume('soundcloud', pendingScVolume);
-    }
+    scWidget.setVolume(pendingScVolume);
     updatePlayerUIForSoundcloud();
-    updateZoneGlow();
   });
 }
 // ── BOOT (WRAPPED IN FIREBASE AUTH) ───────────────────────────────────────────
@@ -3151,9 +2615,8 @@ auth.onAuthStateChanged(async (user) => {  // <-- Notice the 'async' here
     
     // FETCH DATA BEFORE RENDERING
     await loadZonesFromCloud(user.uid);
-
+    
     render();
-    backfillSpotifyDetails();
     updateChip();
     // Start in Navigate so clicks can't start a zone by accident, except on a brand-new
     // map (no shapes yet), which starts on drawing the selected zone
